@@ -1,8 +1,9 @@
 package test
 
 import (
-	"github.com/temirov/utils/text"
 	"testing"
+
+	"github.com/tyemirov/utils/text"
 )
 
 // TestSanitizeToCamelCase tests the SanitizeToCamelCase function

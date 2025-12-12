@@ -74,7 +74,7 @@ func TestGetEnvOrFailExternal(t *testing.T) {
 import (
 	"fmt"
 	"os"
-	"github.com/temirov/utils/system"
+	"github.com/tyemirov/utils/system"
 )
 
 func main() {

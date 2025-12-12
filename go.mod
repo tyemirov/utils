@@ -1,3 +1,3 @@
-module github.com/temirov/utils
+module github.com/tyemirov/utils
 
-go 1.23.4
+go 1.25.4

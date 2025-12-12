@@ -1,9 +1,10 @@
 package test
 
 import (
-	"github.com/temirov/utils/math"
-	"github.com/temirov/utils/pointers"
 	"testing"
+
+	"github.com/tyemirov/utils/math"
+	"github.com/tyemirov/utils/pointers"
 )
 
 // TestFormatNumber is a table-driven test for the FormatNumber function.
