@@ -136,6 +136,11 @@ Convenience functions for obtaining pointers to primitive values.
 
 Unexported helpers for strings, integers and booleans exist for internal tests.
 
+## Scheduler
+Retry-aware scheduling helpers.
+
+- **Worker** - Runs a periodic scan over pending jobs, applies exponential backoff, and persists attempt results via a repository interface.
+
 ---
 
 ### **Testing**
@@ -171,6 +176,5 @@ Contributions are welcome!
 ### **License**
 
 This project is licensed under the **MIT License**. See the **LICENSE** file for details.
-
 
 
