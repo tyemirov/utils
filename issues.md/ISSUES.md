@@ -22,4 +22,6 @@ Unlike Client.Chat, Factory.Chat assumes the caller passes a non-nil context and
 
 ## Maintenance (407–449)
 
+- [x] [UT-407] Add Go CI gates (fmt/vet/staticcheck/ineffassign) and fix baseline failures. (Update GitHub Actions; ignore PLAN.md; normalize -0 formatting; export pointer helpers.)
+
 ## Planning (do not implement yet) (450–499)

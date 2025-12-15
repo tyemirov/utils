@@ -1,6 +1,7 @@
 package test
 
 import (
+	stdlibmath "math"
 	"testing"
 
 	"github.com/tyemirov/utils/math"
@@ -9,6 +10,7 @@ import (
 
 // TestFormatNumber is a table-driven test for the FormatNumber function.
 func TestFormatNumber(t *testing.T) {
+	negativeZero := stdlibmath.Copysign(0, -1)
 	tests := []struct {
 		name     string
 		input    *float64
@@ -22,7 +24,7 @@ func TestFormatNumber(t *testing.T) {
 		{"Negative whole number", pointers.FromFloat(-3.0), "-3"},
 		{"Negative decimal number", pointers.FromFloat(-3.14), "-3.14"},
 		{"Zero", pointers.FromFloat(0.0), "0"},
-		{"Negative zero", pointers.FromFloat(-0.0), "0"}, // Go treats -0.0 as 0.0 in string formatting
+		{"Negative zero", pointers.FromFloat(negativeZero), "0"},
 		{"Large whole number", pointers.FromFloat(123456789.0), "123456789"},
 		{"Null pointer (nil)", nil, ""},
 	}
