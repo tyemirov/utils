@@ -157,6 +157,9 @@ func (client *Client) Chat(ctx context.Context, request ChatRequest) (string, er
 	if len(request.Messages) == 0 {
 		return "", errors.New("llm request requires at least one message")
 	}
+	if responseFormatError := validateResponseFormat(request.ResponseFormat); responseFormatError != nil {
+		return "", fmt.Errorf("encode llm request: %w", responseFormatError)
+	}
 	payload := client.buildRequestPayload(request)
 	requestBytes, marshalError := json.Marshal(payload)
 	if marshalError != nil {
@@ -263,6 +266,30 @@ func (client *Client) buildRequestPayload(request ChatRequest) chatCompletionReq
 		}
 	}
 	return payload
+}
+
+func validateResponseFormat(format *ResponseFormat) error {
+	if format == nil {
+		return nil
+	}
+	if format.Type != "json_schema" {
+		return nil
+	}
+
+	schemaBytes := bytes.TrimSpace(format.Schema)
+	if len(schemaBytes) == 0 {
+		return errors.New("llm response format schema is required")
+	}
+
+	var parsed any
+	if unmarshalError := json.Unmarshal(schemaBytes, &parsed); unmarshalError != nil {
+		return fmt.Errorf("invalid llm response format schema: %w", unmarshalError)
+	}
+	if _, ok := parsed.(map[string]any); !ok {
+		return errors.New("llm response format schema must be a JSON object")
+	}
+
+	return nil
 }
 
 func truncateForLog(value string, limit int) string {
