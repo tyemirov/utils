@@ -32,14 +32,18 @@ func FormatNumber(num *float64) string {
 	if num == nil {
 		return ""
 	}
-	if *num == math.Trunc(*num) {
-		return fmt.Sprintf("%.0f", *num) // Whole number: no decimal places
+	value := *num
+	if value == 0 {
+		return "0"
+	}
+	if value == math.Trunc(value) {
+		return fmt.Sprintf("%.0f", value) // Whole number: no decimal places
 	}
 	// Convert to string with a large precision to avoid scientific notation
-	str := fmt.Sprintf("%.15f", *num)
-	str = strings.TrimRight(str, "0") // Remove trailing zeros
-	str = strings.TrimRight(str, ".") // Remove trailing dot if no decimals left
-	return str
+	formatted := fmt.Sprintf("%.15f", value)
+	formatted = strings.TrimRight(formatted, "0") // Remove trailing zeros
+	formatted = strings.TrimRight(formatted, ".") // Remove trailing dot if no decimals left
+	return formatted
 }
 
 // ChanceOf returns true with the given probability (0.0 to 1.0).
