@@ -91,10 +91,16 @@ func TestClientChatFailsWithInvalidRequestURL(t *testing.T) {
 }
 
 func TestClientChatFailsWhenMarshallingRequestPayload(t *testing.T) {
+	httpCallCount := 0
 	client, err := NewClient(Config{
 		BaseURL: "http://example.com",
 		APIKey:  "token",
 		Model:   "model",
+		HTTPClient: stubHTTPClient{do: func(request *http.Request) (*http.Response, error) {
+			httpCallCount++
+			return nil, errors.New("unexpected http call")
+		}},
+		RequestTimeout: time.Second,
 	})
 	if err != nil {
 		t.Fatalf("new client: %v", err)
@@ -111,6 +117,42 @@ func TestClientChatFailsWhenMarshallingRequestPayload(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "encode llm request") {
 		t.Fatalf("expected encode request error, got %v", err)
+	}
+	if httpCallCount != 0 {
+		t.Fatalf("expected no http calls, got %d", httpCallCount)
+	}
+}
+
+func TestClientChatRejectsResponseFormatSchemaThatIsNotObject(t *testing.T) {
+	httpCallCount := 0
+	client, err := NewClient(Config{
+		BaseURL: "http://example.com",
+		APIKey:  "token",
+		Model:   "model",
+		HTTPClient: stubHTTPClient{do: func(request *http.Request) (*http.Response, error) {
+			httpCallCount++
+			return nil, errors.New("unexpected http call")
+		}},
+		RequestTimeout: time.Second,
+	})
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+
+	_, err = client.Chat(context.Background(), ChatRequest{
+		Messages: []Message{{Role: "user", Content: "hello"}},
+		ResponseFormat: &ResponseFormat{
+			Type:   "json_schema",
+			Name:   "example",
+			Schema: []byte(`"not-an-object"`),
+			Strict: true,
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "encode llm request") {
+		t.Fatalf("expected encode request error, got %v", err)
+	}
+	if httpCallCount != 0 {
+		t.Fatalf("expected no http calls, got %d", httpCallCount)
 	}
 }
 
