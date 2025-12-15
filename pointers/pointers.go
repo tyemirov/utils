@@ -4,23 +4,21 @@
 package pointers
 
 // FromFloat returns a pointer to the provided float64 value.
-func FromFloat(f float64) *float64 {
-	return &f
+func FromFloat(value float64) *float64 {
+	return &value
 }
 
-// fromString returns a pointer to the provided string. It is unexported as it
-// is primarily used internally for testing.
-func fromString(s string) *string {
-	return &s
+// FromString returns a pointer to the provided string value.
+func FromString(value string) *string {
+	return &value
 }
 
-// fromInteger returns a pointer to the provided int. It is kept unexported
-// because only specific packages require it.
-func fromInteger(i int) *int {
-	return &i
+// FromInt returns a pointer to the provided int value.
+func FromInt(value int) *int {
+	return &value
 }
 
-// fromBoolean returns a pointer to the provided bool value.
-func fromBoolean(b bool) *bool {
-	return &b
+// FromBool returns a pointer to the provided bool value.
+func FromBool(value bool) *bool {
+	return &value
 }

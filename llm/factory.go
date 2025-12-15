@@ -86,6 +86,11 @@ func (factory *Factory) Chat(ctx context.Context, request ChatRequest) (string, 
 		return "", errors.New("llm factory is not configured")
 	}
 
+	requestContext := ctx
+	if requestContext == nil {
+		requestContext = context.Background()
+	}
+
 	attempts := factory.retryPolicy.MaxAttempts
 	if attempts <= 0 {
 		attempts = 1
@@ -98,7 +103,7 @@ func (factory *Factory) Chat(ctx context.Context, request ChatRequest) (string, 
 
 	var lastError error
 	for attempt := 1; ; attempt++ {
-		response, callErr := factory.baseClient.Chat(ctx, request)
+		response, callErr := factory.baseClient.Chat(requestContext, request)
 		if callErr == nil {
 			trimmed := strings.TrimSpace(response)
 			if trimmed != "" {
@@ -112,7 +117,7 @@ func (factory *Factory) Chat(ctx context.Context, request ChatRequest) (string, 
 			return "", fmt.Errorf("llm chat failed after %d attempts: %w", attempts, lastError)
 		}
 
-		if ctxErr := ctx.Err(); ctxErr != nil {
+		if ctxErr := requestContext.Err(); ctxErr != nil {
 			return "", fmt.Errorf("llm chat cancelled: %w", ctxErr)
 		}
 
@@ -122,7 +127,7 @@ func (factory *Factory) Chat(ctx context.Context, request ChatRequest) (string, 
 		}
 
 		if wait > 0 {
-			if sleepErr := factory.sleep(ctx, wait); sleepErr != nil {
+			if sleepErr := factory.sleep(requestContext, wait); sleepErr != nil {
 				return "", fmt.Errorf("llm chat retry interrupted: %w", sleepErr)
 			}
 		}

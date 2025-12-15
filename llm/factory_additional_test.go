@@ -49,6 +49,36 @@ func TestFactoryChatSurfacesContextCancellation(t *testing.T) {
 	}
 }
 
+func TestFactoryChatUsesBackgroundWhenContextNil(t *testing.T) {
+	baseClient := &Client{
+		baseURL: "http://example.com",
+		apiKey:  "token",
+		model:   "model",
+		httpClient: stubHTTPClient{do: func(request *http.Request) (*http.Response, error) {
+			return nil, errors.New("transport failed")
+		}},
+		timeout: time.Second,
+	}
+	factory := &Factory{
+		baseClient:  baseClient,
+		retryPolicy: normaliseRetryPolicy(RetryPolicy{MaxAttempts: 2}),
+		sleep:       func(ctx context.Context, duration time.Duration) error { return nil },
+	}
+
+	defer func() {
+		recovered := recover()
+		if recovered != nil {
+			t.Fatalf("expected no panic, got %v", recovered)
+		}
+	}()
+
+	var requestContext context.Context
+	_, err := factory.Chat(requestContext, ChatRequest{Messages: []Message{{Role: "user", Content: "hello"}}})
+	if err == nil || !strings.Contains(err.Error(), "llm chat failed") {
+		t.Fatalf("expected chat failure, got %v", err)
+	}
+}
+
 func TestFactoryChatStopsWhenSleepFails(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		writer.WriteHeader(http.StatusBadGateway)
