@@ -1,5 +1,27 @@
 # Changelog
 
+## [v0.1.3]
+
+### Features ✨
+- Add autonomous agentic flow with LLMs for advanced user scenarios
+
+### Improvements ⚙️
+- Enforce Go formatting, vetting, staticcheck, and ineffassign checks in CI pipeline
+- Add detailed architecture documentation to clarify package design and boundaries
+- Introduce comprehensive Git and Go agent guidelines for workflow and coding standards
+
+### Bug Fixes 🐛
+- Validate JSON schema response before sending in LLM client to prevent invalid requests
+- Handle nil context gracefully in llm Factory.Chat method to avoid panics
+- Properly close response body on HTTP Do errors to prevent resource leaks
+
+### Testing 🧪
+- Expanded LLM-related tests to cover additional edge cases and error handling
+
+### Docs 📚
+- Add ARCHITECTURE.md to explain repository design and package responsibilities
+- Add AGENTS.md, AGENTS.GIT.md, and AGENTS.GO.md documents outlining workflows, git policies, and Go best practices
+
 ## [v0.1.1]
 
 ### Features ✨
