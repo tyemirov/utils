@@ -24,6 +24,20 @@ type errorReadCloser struct{}
 func (errorReadCloser) Read([]byte) (int, error) { return 0, errors.New("read failed") }
 func (errorReadCloser) Close() error             { return nil }
 
+type closeTrackingReadCloser struct {
+	reader io.Reader
+	closed bool
+}
+
+func (tracker *closeTrackingReadCloser) Read(destination []byte) (int, error) {
+	return tracker.reader.Read(destination)
+}
+
+func (tracker *closeTrackingReadCloser) Close() error {
+	tracker.closed = true
+	return nil
+}
+
 func TestClientChatFailsWhenClientIsNil(t *testing.T) {
 	var client *Client
 	_, err := client.Chat(context.Background(), ChatRequest{Messages: []Message{{Role: "user", Content: "hello"}}})
@@ -50,7 +64,8 @@ func TestClientChatUsesBackgroundWhenContextNil(t *testing.T) {
 		t.Fatalf("new client: %v", err)
 	}
 
-	response, err := client.Chat(nil, ChatRequest{Messages: []Message{{Role: "user", Content: "hello"}}})
+	var requestContext context.Context
+	response, err := client.Chat(requestContext, ChatRequest{Messages: []Message{{Role: "user", Content: "hello"}}})
 	if err != nil {
 		t.Fatalf("chat: %v", err)
 	}
@@ -113,6 +128,30 @@ func TestClientChatSurfacesHTTPClientFailures(t *testing.T) {
 	_, err := client.Chat(context.Background(), ChatRequest{Messages: []Message{{Role: "user", Content: "hello"}}})
 	if err == nil || !strings.Contains(err.Error(), "send llm request") {
 		t.Fatalf("expected send request error, got %v", err)
+	}
+}
+
+func TestClientChatClosesResponseBodyWhenHTTPClientReturnsResponseAndError(t *testing.T) {
+	closeTracker := &closeTrackingReadCloser{reader: strings.NewReader(`{"error":"protocol broken"}`)}
+	client := &Client{
+		baseURL: "http://example.com",
+		apiKey:  "token",
+		model:   "model",
+		httpClient: stubHTTPClient{do: func(request *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       closeTracker,
+			}, errors.New("transport failed")
+		}},
+		timeout: time.Second,
+	}
+
+	_, err := client.Chat(context.Background(), ChatRequest{Messages: []Message{{Role: "user", Content: "hello"}}})
+	if err == nil || !strings.Contains(err.Error(), "send llm request") {
+		t.Fatalf("expected send request error, got %v", err)
+	}
+	if !closeTracker.closed {
+		t.Fatalf("expected response body to be closed when request fails")
 	}
 }
 
@@ -347,8 +386,8 @@ func TestDecodeRefusalReturnsEmptyOnNilOrInvalidPayload(t *testing.T) {
 
 func TestExtractMessageContentErrorsOnRefusalWhenContentUnsupported(t *testing.T) {
 	content, err := extractMessageContent(chatMessageResponse{
-		Content:  []byte(`123`),
-		Refusal:  []byte(`{"content":"nope"}`),
+		Content:   []byte(`123`),
+		Refusal:   []byte(`{"content":"nope"}`),
 		ToolCalls: nil,
 	})
 	if err == nil || !strings.Contains(err.Error(), "llm refusal") {

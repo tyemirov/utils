@@ -12,14 +12,17 @@ Each issue is formatted as `- [ ] [UT-<number>]`. When resolved it becomes `- [x
 
 ## BugFixes (300–399)
 
-- [ ] [UT-300] Close response body when transport returns both response and error.
+- [x] [UT-300] Close response body when transport returns both response and error. (Close response body on Do error; add regression test.)
 
 The error path after httpClient.Do returns immediately without closing the response body when Do returns both a response and an error. Per net/http this can happen for protocol errors or cancellations, and the caller must still close Response.Body; skipping it leaks the underlying connection and prevents keep-alives. Consider closing httpResponse.Body before returning the error.
 
-- [ ] [UT-301] Guard nil contexts in factory Chat.
+- [x] [UT-301] Guard nil contexts in factory Chat. (Treat nil contexts as background context; add regression test.)
 
 Unlike Client.Chat, Factory.Chat assumes the caller passes a non-nil context and dereferences ctx.Err() unconditionally. Passing nil—which the client explicitly supports by falling back to context.Background()—will panic here, breaking callers that swap in a factory without changing their context handling.
 
 ## Maintenance (407–449)
+
+- [x] [UT-407] Add Go CI gates (fmt/vet/staticcheck/ineffassign) and fix baseline failures. (Update GitHub Actions; ignore PLAN.md; normalize -0 formatting; export pointer helpers.)
+- [x] [UT-408] Add missing ARCHITECTURE.md. (Document package layout, design principles, and tooling.)
 
 ## Planning (do not implement yet) (450–499)

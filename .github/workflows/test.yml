@@ -12,6 +12,18 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v4
         with:
-          go-version: stable
+          go-version-file: go.mod
+      - name: Check formatting
+        run: test -z "$(gofmt -l .)"
+      - name: Run vet
+        run: go vet ./...
+      - name: Install linters
+        run: |
+          go install honnef.co/go/tools/cmd/staticcheck@latest
+          go install github.com/gordonklaus/ineffassign@latest
+      - name: Run linters
+        run: |
+          staticcheck ./...
+          ineffassign ./...
       - name: Run tests
         run: go test ./...

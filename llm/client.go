@@ -185,6 +185,12 @@ func (client *Client) Chat(ctx context.Context, request ChatRequest) (string, er
 
 	httpResponse, callError := client.httpClient.Do(httpRequest)
 	if callError != nil {
+		if httpResponse != nil && httpResponse.Body != nil {
+			closeError := httpResponse.Body.Close()
+			if closeError != nil {
+				callError = errors.Join(callError, fmt.Errorf("close llm response body: %w", closeError))
+			}
+		}
 		return "", fmt.Errorf("send llm request: %w", callError)
 	}
 	defer httpResponse.Body.Close()
