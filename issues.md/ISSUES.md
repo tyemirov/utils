@@ -28,5 +28,6 @@ Chat marshals the request payload directly with json.Marshal even when ResponseF
 
 - [x] [UT-407] Add Go CI gates (fmt/vet/staticcheck/ineffassign) and fix baseline failures. (Update GitHub Actions; ignore PLAN.md; normalize -0 formatting; export pointer helpers.)
 - [x] [UT-408] Add missing ARCHITECTURE.md. (Document package layout, design principles, and tooling.)
+- [x] [UT-409] Add preflight config reporting helpers and Viper adapter for shared service tooling. (Imported preflight package from TAuth and wired Viper adapter + docs.)
 
 ## Planning (do not implement yet) (450–499)

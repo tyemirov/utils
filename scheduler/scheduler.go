@@ -208,4 +208,3 @@ func (worker *Worker) executeJob(ctx context.Context, job Job, now time.Time) {
 
 	worker.logger.Info("scheduler_dispatch_success", "job_id", job.ID, "status", status)
 }
-

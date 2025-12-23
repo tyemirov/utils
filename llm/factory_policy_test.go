@@ -108,4 +108,3 @@ func TestFactoryChatUsesSingleAttemptWhenPolicyZero(t *testing.T) {
 		t.Fatalf("expected single-attempt error, got %v", err)
 	}
 }
-

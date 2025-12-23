@@ -3,4 +3,3 @@
 // request/response types (`Message`, `ChatRequest`), and configurable HTTP plumbing so
 // higher-level packages can inject or mock LLM dependencies without duplicating API code.
 package llm
-
