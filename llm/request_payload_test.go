@@ -86,4 +86,3 @@ func TestClientChatRequestPayloadSupportsResponseFormat(t *testing.T) {
 		t.Fatalf("expected strict=true, got %#v", jsonSchema["strict"])
 	}
 }
-

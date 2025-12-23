@@ -156,4 +156,3 @@ func TestClientChatRejectsEmptyMessages(t *testing.T) {
 		t.Fatalf("expected message validation error, got %v", err)
 	}
 }
-

@@ -206,4 +206,3 @@ type assertionError string
 func (err assertionError) Error() string {
 	return string(err)
 }
-
