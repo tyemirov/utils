@@ -1,5 +1,25 @@
 # Changelog
 
+## [v0.2.0]
+
+### Features ✨
+- Add preflight reporting helpers for shared service tooling.
+- Move validation logic to edge.
+
+### Improvements ⚙️
+- Introduce Viper adapter for YAML configuration loading and redaction.
+- Add support for redacted configuration reporting with stable hash fingerprints.
+
+### Bug Fixes 🐛
+- _No changes._
+
+### Testing 🧪
+- Add tests for preflight report generation and dependency checks.
+- Validate service info requirements and error scenarios.
+
+### Docs 📚
+- Add comprehensive preflight package documentation explaining report structure, redaction, and usage.
+
 ## [v0.1.3]
 
 ### Features ✨
