@@ -1,5 +1,22 @@
 # Changelog
 
+## [v0.2.1]
+
+### Features ✨
+- _No changes._
+
+### Improvements ⚙️
+- _No changes._
+
+### Bug Fixes 🐛
+- Prevent duplicate side effects under worker contention by adding an optional scheduler claim hook (`ClaimingRepository`) that skips dispatch when claim ownership is lost.
+
+### Testing 🧪
+- Add scheduler regression tests for lost-claim and claim-error scenarios to ensure dispatch is skipped deterministically.
+
+### Docs 📚
+- _No changes._
+
 ## [v0.2.0]
 
 ### Features ✨

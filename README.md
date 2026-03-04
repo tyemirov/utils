@@ -140,6 +140,7 @@ Unexported helpers for strings, integers and booleans exist for internal tests.
 Retry-aware scheduling helpers.
 
 - **Worker** - Runs a periodic scan over pending jobs, applies exponential backoff, and persists attempt results via a repository interface.
+- **ClaimingRepository (optional)** - Lets repositories atomically claim a job before side effects run; when claim is lost, the worker skips dispatch to avoid duplicate execution under contention.
 
 ---
 
@@ -176,5 +177,4 @@ Contributions are welcome!
 ### **License**
 
 This project is licensed under the **MIT License**. See the **LICENSE** file for details.
-
 

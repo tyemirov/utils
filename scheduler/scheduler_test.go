@@ -132,6 +132,64 @@ func TestWorkerDefaultsFailureStatusOnError(t *testing.T) {
 	}
 }
 
+func TestWorkerSkipsJobWhenClaimLost(t *testing.T) {
+	t.Helper()
+
+	now := time.Now().UTC()
+	repo := &fakeClaimingRepository{
+		fakeRepository: fakeRepository{
+			jobs: []Job{
+				{ID: "job-claim"},
+			},
+		},
+		claimResults: []bool{false},
+	}
+	dispatcher := &fakeDispatcher{}
+
+	worker := newTestWorker(t, repo, dispatcher, now)
+	worker.RunOnce(context.Background())
+
+	if len(repo.claimedJobs) != 1 {
+		t.Fatalf("expected one claim attempt, got %d", len(repo.claimedJobs))
+	}
+	if len(dispatcher.calls) != 0 {
+		t.Fatalf("expected dispatcher not to run when claim is lost")
+	}
+	if len(repo.updates) != 0 {
+		t.Fatalf("expected no attempt update when claim is lost")
+	}
+}
+
+func TestWorkerSkipsJobWhenClaimFails(t *testing.T) {
+	t.Helper()
+
+	now := time.Now().UTC()
+	repo := &fakeClaimingRepository{
+		fakeRepository: fakeRepository{
+			jobs: []Job{
+				{ID: "job-claim-error"},
+			},
+		},
+		claimErrors: []error{
+			assertionError("claim failed"),
+		},
+	}
+	dispatcher := &fakeDispatcher{}
+
+	worker := newTestWorker(t, repo, dispatcher, now)
+	worker.RunOnce(context.Background())
+
+	if len(repo.claimedJobs) != 1 {
+		t.Fatalf("expected one claim attempt, got %d", len(repo.claimedJobs))
+	}
+	if len(dispatcher.calls) != 0 {
+		t.Fatalf("expected dispatcher not to run when claim fails")
+	}
+	if len(repo.updates) != 0 {
+		t.Fatalf("expected no attempt update when claim fails")
+	}
+}
+
 // Helpers.
 
 type fakeRepository struct {
@@ -171,6 +229,31 @@ func (dispatcher *fakeDispatcher) Attempt(_ context.Context, job Job) (DispatchR
 		dispatcher.errors = dispatcher.errors[1:]
 	}
 	return result, err
+}
+
+type fakeClaimingRepository struct {
+	fakeRepository
+	claimResults []bool
+	claimErrors  []error
+	claimedJobs  []Job
+}
+
+func (repo *fakeClaimingRepository) ClaimJobForAttempt(_ context.Context, job Job, _ time.Time) (bool, error) {
+	repo.claimedJobs = append(repo.claimedJobs, job)
+
+	claimed := true
+	if len(repo.claimResults) > 0 {
+		claimed = repo.claimResults[0]
+		repo.claimResults = repo.claimResults[1:]
+	}
+
+	var err error
+	if len(repo.claimErrors) > 0 {
+		err = repo.claimErrors[0]
+		repo.claimErrors = repo.claimErrors[1:]
+	}
+
+	return claimed, err
 }
 
 type fixedClock struct {

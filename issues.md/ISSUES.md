@@ -12,6 +12,10 @@ Each issue is formatted as `- [ ] [UT-<number>]`. When resolved it becomes `- [x
 
 ## BugFixes (300–399)
 
+- [x] [UT-303] Skip dispatch when claim for attempt is lost. (Add optional claim hook in scheduler worker; skip dispatch/update when claim returns false or errors; add regression tests.)
+
+When multiple workers contend for the same pending entry, the scheduler can dispatch duplicate attempts unless the repository can atomically claim ownership before side effects run. Add a claim gate so workers skip dispatch when claim returns false.
+
 - [x] [UT-300] Close response body when transport returns both response and error. (Close response body on Do error; add regression test.)
 
 The error path after httpClient.Do returns immediately without closing the response body when Do returns both a response and an error. Per net/http this can happen for protocol errors or cancellations, and the caller must still close Response.Body; skipping it leaks the underlying connection and prevents keep-alives. Consider closing httpResponse.Body before returning the error.
