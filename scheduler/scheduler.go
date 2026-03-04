@@ -16,6 +16,11 @@ type Repository interface {
 	ApplyAttemptResult(ctx context.Context, job Job, update AttemptUpdate) error
 }
 
+// ClaimingRepository optionally provides an ownership claim gate before dispatch.
+type ClaimingRepository interface {
+	ClaimJobForAttempt(ctx context.Context, job Job, attemptedAt time.Time) (bool, error)
+}
+
 // Dispatcher performs the effectful work for a job (sending an email, firing an SMS, etc.).
 type Dispatcher interface {
 	Attempt(ctx context.Context, job Job) (DispatchResult, error)
@@ -154,6 +159,9 @@ func (worker *Worker) runCycle(ctx context.Context) {
 		if !worker.shouldAttempt(job, now) {
 			continue
 		}
+		if !worker.claimJob(ctx, job, now) {
+			continue
+		}
 		worker.executeJob(ctx, job, now)
 	}
 }
@@ -207,4 +215,21 @@ func (worker *Worker) executeJob(ctx context.Context, job Job, now time.Time) {
 	}
 
 	worker.logger.Info("scheduler_dispatch_success", "job_id", job.ID, "status", status)
+}
+
+func (worker *Worker) claimJob(ctx context.Context, job Job, now time.Time) bool {
+	claimingRepository, isClaimingRepository := worker.repository.(ClaimingRepository)
+	if !isClaimingRepository {
+		return true
+	}
+	claimed, claimErr := claimingRepository.ClaimJobForAttempt(ctx, job, now.UTC())
+	if claimErr != nil {
+		worker.logger.Error("scheduler_claim_error", "job_id", job.ID, "error", claimErr)
+		return false
+	}
+	if !claimed {
+		worker.logger.Info("scheduler_claim_lost", "job_id", job.ID)
+		return false
+	}
+	return true
 }
