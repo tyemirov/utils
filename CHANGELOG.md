@@ -1,5 +1,23 @@
 # Changelog
 
+## [v0.3.0]
+
+### Features ✨
+- Add `crawler` package — a generic, reusable Colly-based web crawler with concurrent page fetching, retries with exponential backoff, rate limiting, and pluggable document evaluation via the `Evaluator` interface.
+
+### Improvements ⚙️
+- Upgrade CI workflow to `actions/checkout@v4` and `actions/setup-go@v5` with `go-version: 'stable'`.
+- Fix GitHub Actions `allowed_actions` configuration that was blocking all CI runs.
+
+### Bug Fixes 🐛
+- _No changes._
+
+### Testing 🧪
+- Add crawler integration tests: basic crawl with CSS selector evaluation, and retry with exponential backoff on server errors.
+
+### Docs 📚
+- _No changes._
+
 ## [v0.2.1]
 
 ### Features ✨
