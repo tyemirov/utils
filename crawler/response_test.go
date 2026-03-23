@@ -532,6 +532,153 @@ func TestNoopPlatformHooksIsContentCompleteForRealDocument(t *testing.T) {
 	require.True(t, hooks.IsContentComplete(doc))
 }
 
+type recordingResponseHandler struct {
+	binaryResponseCalls []recordedBinaryCall
+	binaryReturnValue   bool
+	beforeEvalCalls     int
+	afterEvalCalls      int
+	afterEvalResults    []*Result
+}
+
+type recordedBinaryCall struct {
+	productID     string
+	fileExtension string
+}
+
+func (handler *recordingResponseHandler) HandleBinaryResponse(_ *colly.Response, productID string, fileExtension string) bool {
+	handler.binaryResponseCalls = append(handler.binaryResponseCalls, recordedBinaryCall{
+		productID:     productID,
+		fileExtension: fileExtension,
+	})
+	return handler.binaryReturnValue
+}
+
+func (handler *recordingResponseHandler) BeforeEvaluation(_ *colly.Response, _ *goquery.Document) {
+	handler.beforeEvalCalls++
+}
+
+func (handler *recordingResponseHandler) AfterEvaluation(_ *colly.Response, _ *goquery.Document, result *Result) {
+	handler.afterEvalCalls++
+	handler.afterEvalResults = append(handler.afterEvalResults, result)
+}
+
+func TestHandleResponseCallsBeforeAndAfterEvaluationHandlers(t *testing.T) {
+	t.Parallel()
+
+	results := make(chan *Result, 1)
+	firstHandler := &recordingResponseHandler{}
+	secondHandler := &recordingResponseHandler{}
+	ruleEvaluator := &countingRuleEvaluator{configured: 1}
+	processor := &responseProcessor{
+		platformID:       "TEST",
+		platformHooks:    noopPlatformHooks{},
+		retryHandler:     newRetryHandler(ScraperConfig{RetryCount: 0}, noopLogger{}),
+		ruleEvaluator:    ruleEvaluator,
+		results:          results,
+		logger:           noopLogger{},
+		responseHandlers: []ResponseHandler{firstHandler, secondHandler},
+	}
+
+	response := newTestResponse("EVAL-PRODUCT-001")
+	response.Body = []byte(`<html><head><title>Valid Title</title></head><body></body></html>`)
+	response.StatusCode = http.StatusOK
+	headers := http.Header{}
+	response.Headers = &headers
+	pageURL, parseErr := url.Parse("https://example.com/product/EVAL-PRODUCT-001")
+	require.NoError(t, parseErr)
+	response.Request.URL = pageURL
+
+	processor.handleResponse(response)
+
+	result := <-results
+	require.True(t, result.Success)
+
+	require.Equal(t, 1, firstHandler.beforeEvalCalls)
+	require.Equal(t, 1, secondHandler.beforeEvalCalls)
+	require.Equal(t, 1, firstHandler.afterEvalCalls)
+	require.Equal(t, 1, secondHandler.afterEvalCalls)
+	require.NotNil(t, firstHandler.afterEvalResults[0])
+	require.Equal(t, "EVAL-PRODUCT-001", firstHandler.afterEvalResults[0].ProductID)
+}
+
+func TestHandleResponseBinaryHandlerShortCircuitsWhenReturningTrue(t *testing.T) {
+	t.Parallel()
+
+	results := make(chan *Result, 1)
+	interceptingHandler := &recordingResponseHandler{binaryReturnValue: true}
+	unreachedHandler := &recordingResponseHandler{}
+	ruleEvaluator := &countingRuleEvaluator{configured: 1}
+	processor := &responseProcessor{
+		platformID:       "TEST",
+		platformHooks:    noopPlatformHooks{},
+		retryHandler:     newRetryHandler(ScraperConfig{RetryCount: 0}, noopLogger{}),
+		ruleEvaluator:    ruleEvaluator,
+		results:          results,
+		logger:           noopLogger{},
+		responseHandlers: []ResponseHandler{interceptingHandler, unreachedHandler},
+	}
+
+	response := newTestResponse("BINARY-PRODUCT-001")
+	response.Body = []byte{0xFF, 0xD8, 0xFF, 0xE0}
+	response.StatusCode = http.StatusOK
+	headers := http.Header{}
+	response.Headers = &headers
+	pageURL, parseErr := url.Parse("https://example.com/images/photo.jpg")
+	require.NoError(t, parseErr)
+	response.Request.URL = pageURL
+
+	processor.handleResponse(response)
+
+	require.Len(t, interceptingHandler.binaryResponseCalls, 1)
+	require.Equal(t, "BINARY-PRODUCT-001", interceptingHandler.binaryResponseCalls[0].productID)
+	require.Equal(t, ".jpg", interceptingHandler.binaryResponseCalls[0].fileExtension)
+
+	require.Empty(t, unreachedHandler.binaryResponseCalls)
+	require.Zero(t, interceptingHandler.beforeEvalCalls)
+	require.Zero(t, interceptingHandler.afterEvalCalls)
+	require.Zero(t, ruleEvaluator.calls)
+
+	select {
+	case <-results:
+		t.Fatal("expected no result when binary handler short-circuits")
+	default:
+	}
+}
+
+func TestHandleResponseBinaryHandlerContinuesWhenReturningFalse(t *testing.T) {
+	t.Parallel()
+
+	results := make(chan *Result, 1)
+	passThroughHandler := &recordingResponseHandler{binaryReturnValue: false}
+	ruleEvaluator := &countingRuleEvaluator{configured: 1}
+	processor := &responseProcessor{
+		platformID:       "TEST",
+		platformHooks:    noopPlatformHooks{},
+		retryHandler:     newRetryHandler(ScraperConfig{RetryCount: 0}, noopLogger{}),
+		ruleEvaluator:    ruleEvaluator,
+		results:          results,
+		logger:           noopLogger{},
+		responseHandlers: []ResponseHandler{passThroughHandler},
+	}
+
+	response := newTestResponse("HTML-PRODUCT-001")
+	response.Body = []byte(`<html><head><title>Product Page</title></head><body></body></html>`)
+	response.StatusCode = http.StatusOK
+	headers := http.Header{}
+	response.Headers = &headers
+	pageURL, parseErr := url.Parse("https://example.com/product/HTML-PRODUCT-001")
+	require.NoError(t, parseErr)
+	response.Request.URL = pageURL
+
+	processor.handleResponse(response)
+
+	result := <-results
+	require.True(t, result.Success)
+	require.Equal(t, 1, ruleEvaluator.calls)
+	require.Equal(t, 1, passThroughHandler.beforeEvalCalls)
+	require.Equal(t, 1, passThroughHandler.afterEvalCalls)
+}
+
 func loadDocumentFromFile(t *testing.T, path string) *goquery.Document {
 	t.Helper()
 	file, err := os.Open(path)

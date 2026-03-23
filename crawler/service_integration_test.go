@@ -585,3 +585,104 @@ func (fixedRuleEvaluator) Evaluate(_ string, _ *goquery.Document) (RuleEvaluatio
 func (fixedRuleEvaluator) ConfiguredVerifierCount() int {
 	return 0
 }
+
+func TestServiceHookAfterInitCalledDuringNewService(t *testing.T) {
+	t.Parallel()
+
+	results := make(chan *Result, 1)
+	hook := &recordingServiceHook{}
+	cfg := Config{
+		PlatformID: "TEST",
+		Scraper: ScraperConfig{
+			MaxDepth:    1,
+			Parallelism: 1,
+			RetryCount:  0,
+		},
+		Platform: PlatformConfig{
+			AllowedDomains: []string{"example.com"},
+		},
+		RuleEvaluator: fixedRuleEvaluator{},
+		Logger:        noopLogger{},
+	}
+
+	service, serviceErr := NewService(cfg, results, WithServiceHook(hook))
+	require.NoError(t, serviceErr)
+	require.NotNil(t, service)
+
+	require.True(t, hook.afterInitCalled)
+	require.NotNil(t, hook.initCollector)
+	require.NotNil(t, hook.initTransport)
+}
+
+func TestServiceHookBeforeRunAndAfterRunCalledDuringRun(t *testing.T) {
+	t.Parallel()
+
+	responseBody := `<html><head><title>Hook Test</title></head><body></body></html>`
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Content-Type", "text/html")
+		_, _ = writer.Write([]byte(responseBody))
+	}))
+	defer server.Close()
+
+	serverURL, parseErr := url.Parse(server.URL)
+	require.NoError(t, parseErr)
+
+	results := make(chan *Result, 1)
+	hook := &recordingServiceHook{}
+	cfg := Config{
+		PlatformID: "TEST",
+		Scraper: ScraperConfig{
+			MaxDepth:    1,
+			Parallelism: 1,
+			RetryCount:  0,
+		},
+		Platform: PlatformConfig{
+			AllowedDomains: []string{serverURL.Hostname()},
+		},
+		RuleEvaluator: fixedRuleEvaluator{},
+		Logger:        noopLogger{},
+	}
+
+	service, serviceErr := NewService(cfg, results, WithServiceHook(hook))
+	require.NoError(t, serviceErr)
+
+	runContext := context.Background()
+	runErr := service.Run(runContext, []Product{
+		{
+			ID:       "HOOK-TEST-001",
+			Platform: "TEST",
+			URL:      server.URL + "/product/HOOK-TEST-001",
+		},
+	})
+	require.NoError(t, runErr)
+
+	require.True(t, hook.beforeRunCalled)
+	require.NotNil(t, hook.beforeRunContext)
+	require.True(t, hook.afterRunCalled)
+}
+
+func TestServiceHookDefaultsToNoopWhenNotProvided(t *testing.T) {
+	t.Parallel()
+
+	results := make(chan *Result, 1)
+	cfg := Config{
+		PlatformID: "TEST",
+		Scraper: ScraperConfig{
+			MaxDepth:    1,
+			Parallelism: 1,
+			RetryCount:  0,
+		},
+		Platform: PlatformConfig{
+			AllowedDomains: []string{"example.com"},
+		},
+		RuleEvaluator: fixedRuleEvaluator{},
+		Logger:        noopLogger{},
+	}
+
+	service, serviceErr := NewService(cfg, results)
+	require.NoError(t, serviceErr)
+	require.NotNil(t, service)
+
+	_, isNoop := service.serviceHook.(noopServiceHook)
+	require.True(t, isNoop)
+}
