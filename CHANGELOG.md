@@ -1,5 +1,25 @@
 # Changelog
 
+## [v0.5.2] - 2026-03-23
+
+### Features ✨
+- _No changes._
+
+### Improvements ⚙️
+- Add extensive unit tests across crawler and utils packages for improved coverage and reliability.
+- Introduced Makefile with commands for formatting, linting, testing, coverage, and CI integration.
+- Refined crawler constants formatting for better code consistency.
+
+### Bug Fixes 🐛
+- Restore error handling logic that was previously removed during test coverage improvements.
+
+### Testing 🧪
+- Add a large suite of new tests covering crawler package internals, proxies, product creation, configuration validation, file persistence, and more.
+- Include integration and unit tests with improved test coverage metrics.
+
+### Docs 📚
+- _No changes._
+
 ## [v0.4.0]
 
 ### Features ✨
