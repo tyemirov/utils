@@ -11,40 +11,41 @@ import (
 	"github.com/gocolly/colly/v2"
 )
 
-const defaultCollyRequestTimeout = 10 * time.Second
-
-// Service orchestrates crawling of targets and emits results.
+// Service orchestrates crawling of product pages and emits results.
 type Service struct {
-	cfg             Config
-	collector       *colly.Collector
-	responseHandler ResponseHandler
-	retryHandler    RetryHandler
-	filePersister   FilePersister
-	logger          Logger
-	hook            RequestHook
-	ctxMu           sync.RWMutex
-	runCtx          context.Context
-	slots           chan struct{}
+	config              Config
+	collector           *colly.Collector
+	results             chan<- *Result
+	requestConfigurator RequestConfigurator
+	responseProcessor   ResponseProcessor
+	retryHandler        RetryHandler
+	filePersister       FilePersister
+	logger              Logger
+	requestHook         RequestHook
+	ctxMu               sync.RWMutex
+	runCtx              context.Context
+	productSlots        chan struct{}
+	imageQueue          chan imageJob
+	stopImageConverter  func()
 }
 
-// NewService constructs a crawler service.
-// When cfg.ResponseHandler is nil, a DefaultResponseHandler is created using
-// cfg.Evaluator and the results channel.
-// When cfg.ResponseHandler is set, results can be nil.
+const defaultCollyRequestTimeout = 10 * time.Second
+
+// NewService constructs a crawler service configured for a platform.
 func NewService(cfg Config, results chan<- *Result) (*Service, error) {
-	if cfg.ResponseHandler == nil && results == nil {
-		return nil, fmt.Errorf("crawler: results channel is required when no response handler is provided")
+	if results == nil {
+		return nil, fmt.Errorf("crawler: results channel is required")
 	}
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
 
 	logger := ensureLogger(cfg.Logger)
-
 	filePersister := cfg.FilePersister
 	if filePersister == nil && cfg.OutputDirectory != "" {
-		filePersister = NewDirectoryFilePersister(cfg.OutputDirectory, cfg.Category, cfg.RunFolder)
+		filePersister = newDirectoryFilePersister(cfg.OutputDirectory, cfg.PlatformID, cfg.RunFolder)
 	}
+
 	if filePersister != nil {
 		workerCount := cfg.Scraper.Parallelism / 4
 		if workerCount < 2 {
@@ -57,56 +58,91 @@ func NewService(cfg Config, results chan<- *Result) (*Service, error) {
 		if bufferSize < 16 {
 			bufferSize = 16
 		}
-		filePersister = NewBackgroundFilePersister(filePersister, workerCount, bufferSize, logger)
+		filePersister = newBackgroundFilePersister(filePersister, workerCount, bufferSize, logger)
 	}
 
-	retryHandler := NewRetryHandler(cfg.Scraper, logger)
-	requestConfigurator := NewRequestConfigurator(cfg, logger)
-	hook := ensureRequestHook(cfg.Hook)
+	retryHandler := newRetryHandler(cfg.Scraper, logger)
+	requestConfigurator := newRequestConfigurator(cfg, logger)
+	requestHook := ensureRequestHook(cfg.RequestHook)
 
 	collector, proxyTracker, transport, err := newCollector(cfg, logger)
 	if err != nil {
 		return nil, err
 	}
 
-	var responseHandler ResponseHandler
-	if cfg.ResponseHandler != nil {
-		responseHandler = cfg.ResponseHandler
-	} else {
-		responseHandler = NewDefaultResponseHandler(cfg, retryHandler, proxyTracker, filePersister, results, logger)
+	var (
+		imageQueue         chan imageJob
+		stopImageConverter func()
+	)
+	if cfg.Scraper.RetrieveProductImages && filePersister != nil {
+		imageQueue = make(chan imageJob, cfg.Scraper.Parallelism*2)
+		stopImageConverter = startImageConverter(imageQueue, filePersister, logger)
 	}
+
+	responseProcessor := newResponseProcessor(cfg, retryHandler, proxyTracker, filePersister, results, logger, imageQueue)
 
 	requestConfigurator.Configure(collector)
-	responseHandler.Setup(collector)
-	SetupErrorHandling(collector, responseHandler, retryHandler, proxyTracker, logger)
+	setupErrorHandling(collector, responseProcessor, retryHandler, proxyTracker, logger)
+	responseProcessor.Setup(collector)
 
-	svc := &Service{
-		cfg:             cfg,
-		collector:       collector,
-		responseHandler: responseHandler,
-		retryHandler:    retryHandler,
-		filePersister:   filePersister,
-		logger:          logger,
-		hook:            hook,
-		slots:           make(chan struct{}, cfg.Scraper.Parallelism),
+	service := &Service{
+		config:              cfg,
+		collector:           collector,
+		results:             results,
+		requestConfigurator: requestConfigurator,
+		responseProcessor:   responseProcessor,
+		retryHandler:        retryHandler,
+		filePersister:       filePersister,
+		logger:              logger,
+		requestHook:         requestHook,
+		productSlots:        make(chan struct{}, cfg.Scraper.Parallelism),
+		imageQueue:          imageQueue,
+		stopImageConverter:  stopImageConverter,
 	}
 
-	responseHandler.SetSlotReleaser(svc.releaseSlot)
+	responseProcessor.SetResultCallback(service.releaseProductSlot)
 
-	contextTransport := NewContextAwareTransport(transport, svc.currentRunContext)
-	panicSafeTransport := NewPanicSafeTransport(contextTransport, logger)
+	contextTransport := newContextAwareTransport(transport, service.currentRunContext)
+	panicSafeTransport := newPanicSafeTransport(contextTransport, logger)
 	collector.WithTransport(panicSafeTransport)
+	bindDiscoverabilityProberNetwork(cfg, panicSafeTransport)
 
-	return svc, nil
+	return service, nil
 }
 
-// Run visits each target and blocks until all are processed or ctx is cancelled.
-func (svc *Service) Run(ctx context.Context, targets []Target) error {
-	if len(targets) == 0 {
-		return fmt.Errorf("crawler: no targets provided")
+type discoverabilityNetworkBinder interface {
+	bindNetwork(
+		platformID string,
+		transport http.RoundTripper,
+		timeout time.Duration,
+		requestHeaders RequestHeaderProvider,
+	)
+}
+
+func bindDiscoverabilityProberNetwork(cfg Config, transport http.RoundTripper) {
+	if cfg.DiscoverabilityProber == nil || transport == nil {
+		return
 	}
 
-	cleanup := svc.assignRunContext(ctx)
+	binder, ok := cfg.DiscoverabilityProber.(discoverabilityNetworkBinder)
+	if !ok {
+		return
+	}
+
+	timeout := cfg.DiscoverabilityProbeTimeout
+	if timeout <= 0 {
+		timeout = cfg.Scraper.HTTPTimeout
+	}
+	binder.bindNetwork(cfg.PlatformID, transport, timeout, cfg.RequestHeaders)
+}
+
+// Run visits each product URL once and blocks until completion or context cancellation.
+func (service *Service) Run(ctx context.Context, products []Product) error {
+	if len(products) == 0 {
+		return fmt.Errorf("crawler: no products provided")
+	}
+
+	cleanup := service.assignRunContext(ctx)
 	defer cleanup()
 
 	runCtx := ctx
@@ -114,15 +150,15 @@ func (svc *Service) Run(ctx context.Context, targets []Target) error {
 		runCtx = context.Background()
 	}
 
-	for _, target := range targets {
+	for _, product := range products {
 		select {
 		case <-runCtx.Done():
-			svc.logger.Info("Crawler received shutdown signal. Stopping loop...")
+			service.logger.Info("Crawler received shutdown signal. Stopping loop...")
 			goto Cleanup
 		default:
 		}
-		if err := svc.processTarget(runCtx, target); err != nil {
-			svc.logger.Warning("Failed to process target %s: %v", target.ID, err)
+		if err := service.processProduct(runCtx, product); err != nil {
+			service.logger.Warning("Failed to process product %s: %v", product.ID, err)
 			if runCtx.Err() != nil {
 				goto Cleanup
 			}
@@ -130,86 +166,47 @@ func (svc *Service) Run(ctx context.Context, targets []Target) error {
 	}
 
 Cleanup:
-	svc.collector.Wait()
-	if svc.filePersister != nil {
-		if err := svc.filePersister.Close(); err != nil {
-			svc.logger.Error("Failed to close file persister: %v", err)
+	service.collector.Wait()
+
+	if service.stopImageConverter != nil {
+		service.stopImageConverter()
+	}
+
+	if service.filePersister != nil {
+		if err := service.filePersister.Close(); err != nil {
+			service.logger.Error("Failed to close file persister: %v", err)
 		}
 	}
 	return runCtx.Err()
 }
 
-// RetryHandler returns the service's retry handler for use by custom ResponseHandlers.
-func (svc *Service) RetryHandler() RetryHandler {
-	return svc.retryHandler
-}
-
-func (svc *Service) processTarget(ctx context.Context, target Target) error {
-	if err := svc.reserveSlot(ctx, target.ID); err != nil {
+func (service *Service) processProduct(ctx context.Context, product Product) error {
+	if err := service.reserveProductSlot(ctx, product.ID); err != nil {
 		return err
 	}
 
-	reqCtx := colly.NewContext()
-	reqCtx.Put(CtxTargetIDKey, target.ID)
-	reqCtx.Put(CtxTargetCategoryKey, target.Category)
-	reqCtx.Put(CtxTargetURLKey, target.URL)
-	reqCtx.Put(CtxRunContextKey, ctx)
+	requestContext := colly.NewContext()
+	requestContext.Put(ctxProductIDKey, product.ID)
+	requestContext.Put(ctxProductPlatformKey, product.Platform)
+	requestContext.Put(ctxProductURLKey, product.URL)
+	requestContext.Put(ctxRunContextKey, ctx)
 
-	if hookErr := svc.hook.BeforeRequest(ctx, target); hookErr != nil {
-		reqCtx.Put(CtxErrorKey, hookErr)
-		svc.responseHandler.SendResult(&colly.Response{Ctx: reqCtx}, false, hookErr.Error())
+	if hookErr := service.requestHook.BeforeRequest(ctx, product); hookErr != nil {
+		requestContext.Put(ctxProductErrorKey, hookErr)
+		service.responseProcessor.SendFinalResult(&colly.Response{Ctx: requestContext}, false, hookErr.Error())
 		return nil
 	}
 
-	svc.logger.Debug("Visiting URL for target: %s (%s)", target.ID, target.URL)
-	if err := svc.collector.Request(http.MethodGet, target.URL, nil, reqCtx, nil); err != nil {
-		svc.logger.Error("Failed to visit URL: %s, Error: %v", target.URL, err)
-		svc.releaseSlotByID(target.ID)
+	service.logger.Debug("Visiting URL for product: %+v", product)
+	if err := service.collector.Request(http.MethodGet, product.URL, nil, requestContext, nil); err != nil {
+		service.logger.Error("Failed to visit URL: %s, Error: %v", product.URL, err)
+		service.releaseProductSlotByID(product.ID)
 	}
 	return nil
 }
 
-func (svc *Service) reserveSlot(ctx context.Context, targetID string) error {
-	select {
-	case svc.slots <- struct{}{}:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-}
-
-func (svc *Service) releaseSlot(resp *colly.Response) {
-	select {
-	case <-svc.slots:
-	default:
-	}
-}
-
-func (svc *Service) releaseSlotByID(targetID string) {
-	svc.releaseSlot(nil)
-}
-
-func (svc *Service) assignRunContext(ctx context.Context) func() {
-	svc.ctxMu.Lock()
-	svc.runCtx = ctx
-	svc.ctxMu.Unlock()
-	return func() {
-		svc.ctxMu.Lock()
-		svc.runCtx = nil
-		svc.ctxMu.Unlock()
-	}
-}
-
-func (svc *Service) currentRunContext() context.Context {
-	svc.ctxMu.RLock()
-	defer svc.ctxMu.RUnlock()
-	return svc.runCtx
-}
-
-// --- Collector setup ---
-
-func newCollector(cfg Config, logger Logger) (*colly.Collector, ProxyHealth, *http.Transport, error) {
-	c := colly.NewCollector(
+func newCollector(cfg Config, logger Logger) (*colly.Collector, proxyHealth, http.RoundTripper, error) {
+	webCollector := colly.NewCollector(
 		colly.AllowURLRevisit(),
 		colly.AllowedDomains(cfg.Platform.AllowedDomains...),
 		colly.Async(),
@@ -217,53 +214,185 @@ func newCollector(cfg Config, logger Logger) (*colly.Collector, ProxyHealth, *ht
 		colly.IgnoreRobotsTxt(),
 	)
 
-	transport := NewHTTPTransport(cfg.Scraper.InsecureSkipVerify, cfg.Scraper.HTTPTimeout)
-	c.WithTransport(transport)
-	if shouldOverrideTimeout(cfg.Scraper.HTTPTimeout) {
-		c.SetRequestTimeout(cfg.Scraper.HTTPTimeout)
+	transport := newCrawlerHTTPTransport(cfg.Scraper.InsecureSkipVerify, cfg.Scraper.HTTPTimeout)
+	webCollector.WithTransport(transport)
+	if shouldOverrideCollectorRequestTimeout(cfg.Scraper.HTTPTimeout) {
+		// Preserve the crawler's idle-timeout semantics for short requests while
+		// removing Colly's hidden 10s total-request cap when the configured timeout
+		// is longer or explicitly disabled.
+		webCollector.SetRequestTimeout(cfg.Scraper.HTTPTimeout)
 	}
 
-	rule := &colly.LimitRule{
+	limitRule := &colly.LimitRule{
 		DomainGlob:  "*",
 		Parallelism: cfg.Scraper.Parallelism,
 	}
 	if cfg.Scraper.RateLimit > 0 {
-		rule.Delay = cfg.Scraper.RateLimit
-		rule.RandomDelay = cfg.Scraper.RateLimit / 2
+		limitRule.Delay = cfg.Scraper.RateLimit
+		limitRule.RandomDelay = cfg.Scraper.RateLimit / 2
 	}
-	if err := c.Limit(rule); err != nil {
+
+	if err := webCollector.Limit(limitRule); err != nil {
 		return nil, nil, nil, err
 	}
 
-	var tracker ProxyHealth
+	var tracker proxyHealth
+	proxyHealthEnabled := cfg.Scraper.ProxyCircuitBreakerEnabled
 	switch len(cfg.Scraper.ProxyList) {
 	case 0:
 	case 1:
-		proxyFn, err := NewProxyRotator(cfg.Scraper.ProxyList, nil, logger)
+		proxyFn, err := newProxyRotator(cfg.Scraper.ProxyList, nil, logger)
 		if err != nil {
 			return nil, nil, nil, err
 		}
-		c.SetProxyFunc(proxyFn)
+		webCollector.SetProxyFunc(proxyFn)
 	default:
-		if cfg.Scraper.ProxyCircuitBreakerEnabled {
-			tracker = NewProxyHealthTracker(cfg.Scraper.ProxyList, logger)
+		if proxyHealthEnabled {
+			tracker = newProxyHealthTracker(cfg.Scraper.ProxyList, logger)
 		}
-		proxyFn, err := NewProxyRotator(cfg.Scraper.ProxyList, tracker, logger)
+		proxyFn, err := newProxyRotator(cfg.Scraper.ProxyList, tracker, logger)
 		if err != nil {
 			return nil, nil, nil, err
 		}
-		c.SetProxyFunc(proxyFn)
+		webCollector.SetProxyFunc(proxyFn)
 	}
 
-	jar, err := cookiejar.New(nil)
+	cookieJar, err := cookiejar.New(nil)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("crawler: failed to create cookie jar: %w", err)
 	}
-	c.SetCookieJar(jar)
-
-	return c, tracker, transport, nil
+	webCollector.SetCookieJar(cookieJar)
+	return webCollector, tracker, transport, nil
 }
 
-func shouldOverrideTimeout(timeout time.Duration) bool {
+func shouldOverrideCollectorRequestTimeout(timeout time.Duration) bool {
 	return timeout <= 0 || timeout > defaultCollyRequestTimeout
+}
+
+func setupErrorHandling(collector *colly.Collector, processor ResponseProcessor, retryHandler RetryHandler, tracker proxyHealth, logger Logger) {
+	collector.OnError(func(resp *colly.Response, err error) {
+		handleCollectorError(resp, err, processor, retryHandler, tracker, logger)
+	})
+}
+
+func handleCollectorError(resp *colly.Response, err error, processor ResponseProcessor, retryHandler RetryHandler, tracker proxyHealth, logger Logger) {
+	recordProxyFailure(tracker, resp)
+	urlValue, statusCode, proxyURL := extractErrorLogFields(resp)
+	logger.Error("URL: %s, StatusCode: %d, Proxy: %s, Error: %v", urlValue, statusCode, describeProxyForLog(proxyURL), err)
+
+	if resp == nil {
+		return
+	}
+	if resp.Ctx == nil {
+		resp.Ctx = colly.NewContext()
+	}
+
+	errorText := ""
+	if err != nil {
+		errorText = err.Error()
+	}
+
+	resp.Ctx.Put(ctxHTTPStatusCodeKey, resp.StatusCode)
+	resp.Ctx.Put(ctxProductErrorKey, err)
+
+	if resp.StatusCode == http.StatusNotFound {
+		processor.SendFinalResult(resp, false, errorText)
+		return
+	}
+	if resp.Request == nil || resp.Request.URL == nil {
+		processor.SendFinalResult(resp, false, errorText)
+		return
+	}
+
+	if !retryHandler.Retry(resp, RetryOptions{}) {
+		processor.SendFinalResult(resp, false, errorText)
+	}
+}
+
+func extractErrorLogFields(resp *colly.Response) (urlValue string, statusCode int, proxyURL string) {
+	urlValue = unknownURLValue
+	if resp == nil {
+		return urlValue, 0, ""
+	}
+
+	statusCode = resp.StatusCode
+	if resp.Request == nil {
+		return urlValue, statusCode, ""
+	}
+
+	proxyURL = sanitizeProxyURL(resp.Request.ProxyURL)
+	if resp.Request.URL != nil {
+		urlValue = resp.Request.URL.String()
+	}
+
+	return urlValue, statusCode, proxyURL
+}
+
+func recordProxyFailure(tracker proxyHealth, resp *colly.Response) {
+	if tracker == nil || resp == nil || resp.Request == nil {
+		return
+	}
+	if resp.Request.ProxyURL == "" {
+		return
+	}
+	if resp.StatusCode != 0 {
+		return
+	}
+	tracker.RecordFailure(resp.Request.ProxyURL)
+}
+
+func (service *Service) reserveProductSlot(ctx context.Context, productID string) error {
+	if service == nil || service.productSlots == nil {
+		return nil
+	}
+	select {
+	case service.productSlots <- struct{}{}:
+		service.logger.Debug("Reserved crawler slot for product %s", productID)
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (service *Service) releaseProductSlot(resp *colly.Response) {
+	productID := unknownProductID
+	if resp != nil && resp.Ctx != nil {
+		productID = getProductIDFromContext(resp)
+	}
+	service.releaseProductSlotByID(productID)
+}
+
+func (service *Service) releaseProductSlotByID(productID string) {
+	if service == nil || service.productSlots == nil {
+		return
+	}
+	select {
+	case <-service.productSlots:
+		service.logger.Debug("Released crawler slot for product %s", productID)
+	default:
+		service.logger.Warning("Crawler slot release called without reservation for product %s", productID)
+	}
+}
+
+func (service *Service) assignRunContext(ctx context.Context) func() {
+	runCtx := ctx
+	if runCtx == nil {
+		runCtx = context.Background()
+	}
+
+	service.ctxMu.Lock()
+	service.runCtx = runCtx
+	service.ctxMu.Unlock()
+
+	return func() {
+		service.ctxMu.Lock()
+		service.runCtx = nil
+		service.ctxMu.Unlock()
+	}
+}
+
+func (service *Service) currentRunContext() context.Context {
+	service.ctxMu.RLock()
+	defer service.ctxMu.RUnlock()
+	return service.runCtx
 }

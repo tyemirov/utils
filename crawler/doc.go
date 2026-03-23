@@ -1,9 +1,5 @@
-// Package crawler provides a generic, configurable web crawling engine built
-// on Colly. It supports concurrent page fetching, retries with exponential
-// backoff, rate limiting, proxy rotation with circuit-breaker health tracking,
-// and pluggable response processing via the ResponseHandler interface.
-//
-// Simple consumers use an Evaluator with the default response handler.
-// Advanced consumers inject a custom ResponseHandler for full control over
-// how fetched documents are processed and results are emitted.
+// Package crawler provides a reusable crawling service that fetches web pages,
+// applies configurable rules, and emits normalized results. It supports proxy
+// rotation, retry with backoff, rate limiting, platform-specific hooks, and
+// extensible response handling through the ResponseHandler interface.
 package crawler

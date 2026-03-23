@@ -8,69 +8,33 @@ import (
 	"github.com/gocolly/colly/v2"
 )
 
-// ResponseHandler processes HTTP responses and emits results.
-// Implementations are injected into the Service at construction time.
-// The default handler parses HTML, runs an Evaluator, and sends Results.
-// Custom handlers can implement platform-specific logic (image download,
-// discoverability probing, etc.).
-type ResponseHandler interface {
-	Setup(collector *colly.Collector)
-	SendResult(resp *colly.Response, success bool, errorMessage string)
-	SetSlotReleaser(releaser func(*colly.Response))
+// RuleEvaluator produces a RuleEvaluation for a fetched document.
+type RuleEvaluator interface {
+	Evaluate(productID string, document *goquery.Document) (RuleEvaluation, error)
+	ConfiguredVerifierCount() int
 }
 
-// Evaluator processes a fetched HTML document and produces findings.
-// Used by the default ResponseHandler. Not needed when a custom
-// ResponseHandler is provided.
-type Evaluator interface {
-	Evaluate(targetID string, document *goquery.Document) (Evaluation, error)
+// DiscoverabilityProber evaluates search discoverability for a product identifier.
+type DiscoverabilityProber interface {
+	Probe(ctx context.Context, targetASIN string) (Discoverability, error)
 }
 
-// RetryHandler encapsulates retry behaviour for failed responses.
-type RetryHandler interface {
-	Retry(response *colly.Response, options RetryOptions) bool
+// CookieGenerator returns cookies for a specific domain.
+type CookieGenerator func(domain string) []*http.Cookie
+
+// FilePersister persists binary artifacts associated with a product.
+type FilePersister interface {
+	Save(productID, fileName string, content []byte) error
+	Close() error
 }
 
-// RetryOptions controls retry behaviour per-request.
-type RetryOptions struct {
-	SkipDelay    bool
-	LimitRetries bool
-	MaxRetries   int
-}
-
-// Logger emits structured diagnostic messages. Safe for concurrent use.
+// Logger emits structured diagnostic messages. Implementations should be safe
+// for concurrent use. Methods follow fmt.Sprintf semantics.
 type Logger interface {
 	Debug(format string, args ...interface{})
 	Info(format string, args ...interface{})
 	Warning(format string, args ...interface{})
 	Error(format string, args ...interface{})
-}
-
-// HeaderProvider decorates outbound HTTP requests. Optional.
-type HeaderProvider interface {
-	Apply(category string, request *colly.Request)
-}
-
-// CookieProvider returns cookies for a given domain. Optional.
-type CookieProvider func(domain string) []*http.Cookie
-
-// RequestHook runs before each outbound request. Optional.
-type RequestHook interface {
-	BeforeRequest(ctx context.Context, target Target) error
-}
-
-// FilePersister persists binary artifacts associated with a target.
-type FilePersister interface {
-	Save(targetID, fileName string, content []byte) error
-	Close() error
-}
-
-// ProxyHealth tracks proxy availability for circuit-breaker rotation.
-type ProxyHealth interface {
-	IsAvailable(proxy string) bool
-	RecordSuccess(proxy string)
-	RecordFailure(proxy string)
-	RecordCriticalFailure(proxy string)
 }
 
 type noopLogger struct{}
@@ -80,6 +44,15 @@ func (noopLogger) Info(string, ...interface{})    {}
 func (noopLogger) Warning(string, ...interface{}) {}
 func (noopLogger) Error(string, ...interface{})   {}
 
+var packageLogger Logger = noopLogger{}
+
+// SetPackageLogger replaces the package-level logger used by standalone functions.
+func SetPackageLogger(logger Logger) {
+	if logger != nil {
+		packageLogger = logger
+	}
+}
+
 func ensureLogger(logger Logger) Logger {
 	if logger == nil {
 		return noopLogger{}
@@ -87,17 +60,23 @@ func ensureLogger(logger Logger) Logger {
 	return logger
 }
 
-type headerProviderFunc func(category string, request *colly.Request)
-
-func (fn headerProviderFunc) Apply(category string, request *colly.Request) {
-	if fn != nil {
-		fn(category, request)
-	}
+// RequestHeaderProvider decorates outbound collector requests.
+type RequestHeaderProvider interface {
+	Apply(platformID string, request *colly.Request)
 }
 
-func ensureHeaders(provider HeaderProvider) HeaderProvider {
+type requestHeaderProviderFunc func(platformID string, request *colly.Request)
+
+func (provider requestHeaderProviderFunc) Apply(platformID string, request *colly.Request) {
 	if provider == nil {
-		return headerProviderFunc(func(_ string, request *colly.Request) {
+		return
+	}
+	provider(platformID, request)
+}
+
+func ensureRequestHeaders(provider RequestHeaderProvider) RequestHeaderProvider {
+	if provider == nil {
+		return requestHeaderProviderFunc(func(_ string, request *colly.Request) {
 			if request.Headers.Get("User-Agent") == "" {
 				request.Headers.Set("User-Agent", "Mozilla/5.0 (compatible; Crawler/1.0)")
 			}
@@ -106,18 +85,34 @@ func ensureHeaders(provider HeaderProvider) HeaderProvider {
 	return provider
 }
 
-type requestHookFunc func(ctx context.Context, target Target) error
+type RequestHook interface {
+	BeforeRequest(ctx context.Context, product Product) error
+}
 
-func (fn requestHookFunc) BeforeRequest(ctx context.Context, target Target) error {
-	if fn == nil {
+type requestHookFunc func(ctx context.Context, product Product) error
+
+func (hook requestHookFunc) BeforeRequest(ctx context.Context, product Product) error {
+	if hook == nil {
 		return nil
 	}
-	return fn(ctx, target)
+	return hook(ctx, product)
 }
 
 func ensureRequestHook(hook RequestHook) RequestHook {
 	if hook == nil {
-		return requestHookFunc(func(context.Context, Target) error { return nil })
+		return requestHookFunc(func(context.Context, Product) error {
+			return nil
+		})
+	}
+	return hook
+}
+
+// ImageStatusHook receives asynchronous image status transitions for a product identifier.
+type ImageStatusHook func(productID string, status ImageStatus)
+
+func ensureImageStatusHook(hook ImageStatusHook) ImageStatusHook {
+	if hook == nil {
+		return func(string, ImageStatus) {}
 	}
 	return hook
 }

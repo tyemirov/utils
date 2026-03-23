@@ -9,38 +9,45 @@ import (
 )
 
 const (
-	defaultDialKeepAlive         = 30 * time.Second
-	defaultExpectContinueTimeout = time.Second
-	defaultIdleConnTimeout       = 90 * time.Second
-	defaultMaxIdleConns          = 100
+	defaultCrawlerDialKeepAlive         = 30 * time.Second
+	defaultCrawlerExpectContinueTimeout = time.Second
+	defaultCrawlerIdleConnTimeout       = 90 * time.Second
+	defaultCrawlerMaxIdleConns          = 100
 )
 
-// NewHTTPTransport creates an HTTP transport with idle-timeout support.
-func NewHTTPTransport(insecureSkipVerify bool, requestTimeout time.Duration) *http.Transport {
-	dialer := &net.Dialer{KeepAlive: defaultDialKeepAlive}
+func newCrawlerHTTPTransport(insecureSkipVerify bool, requestTimeout time.Duration) *http.Transport {
+	dialer := &net.Dialer{
+		KeepAlive: defaultCrawlerDialKeepAlive,
+	}
 	if requestTimeout > 0 {
 		dialer.Timeout = requestTimeout
 	}
+
 	dialContext := dialer.DialContext
 	if requestTimeout > 0 {
 		dialContext = newIdleTimeoutDialContext(dialer.DialContext, requestTimeout)
 	}
-	return &http.Transport{
+
+	httpTransport := &http.Transport{
 		DialContext:           dialContext,
-		ExpectContinueTimeout: defaultExpectContinueTimeout,
+		ExpectContinueTimeout: defaultCrawlerExpectContinueTimeout,
 		ForceAttemptHTTP2:     false,
-		IdleConnTimeout:       defaultIdleConnTimeout,
-		MaxIdleConns:          defaultMaxIdleConns,
-		TLSClientConfig:       &tls.Config{InsecureSkipVerify: insecureSkipVerify},
+		IdleConnTimeout:       defaultCrawlerIdleConnTimeout,
+		MaxIdleConns:          defaultCrawlerMaxIdleConns,
+		TLSClientConfig: &tls.Config{
+			InsecureSkipVerify: insecureSkipVerify,
+		},
 	}
+
+	return httpTransport
 }
 
 func newIdleTimeoutDialContext(
-	base func(context.Context, string, string) (net.Conn, error),
+	baseDialContext func(context.Context, string, string) (net.Conn, error),
 	idleTimeout time.Duration,
 ) func(context.Context, string, string) (net.Conn, error) {
-	return func(ctx context.Context, network, address string) (net.Conn, error) {
-		conn, err := base(ctx, network, address)
+	return func(ctx context.Context, network string, address string) (net.Conn, error) {
+		conn, err := baseDialContext(ctx, network, address)
 		if err != nil {
 			return nil, err
 		}
@@ -52,7 +59,10 @@ func newIdleTimeoutConn(conn net.Conn, idleTimeout time.Duration) net.Conn {
 	if conn == nil || idleTimeout <= 0 {
 		return conn
 	}
-	return &idleTimeoutConn{Conn: conn, idleTimeout: idleTimeout}
+	return &idleTimeoutConn{
+		Conn:        conn,
+		idleTimeout: idleTimeout,
+	}
 }
 
 type idleTimeoutConn struct {
@@ -60,16 +70,16 @@ type idleTimeoutConn struct {
 	idleTimeout time.Duration
 }
 
-func (c *idleTimeoutConn) Read(p []byte) (int, error) {
-	if err := c.Conn.SetReadDeadline(time.Now().Add(c.idleTimeout)); err != nil {
+func (conn *idleTimeoutConn) Read(p []byte) (int, error) {
+	if err := conn.Conn.SetReadDeadline(time.Now().Add(conn.idleTimeout)); err != nil {
 		return 0, err
 	}
-	return c.Conn.Read(p)
+	return conn.Conn.Read(p)
 }
 
-func (c *idleTimeoutConn) Write(p []byte) (int, error) {
-	if err := c.Conn.SetWriteDeadline(time.Now().Add(c.idleTimeout)); err != nil {
+func (conn *idleTimeoutConn) Write(p []byte) (int, error) {
+	if err := conn.Conn.SetWriteDeadline(time.Now().Add(conn.idleTimeout)); err != nil {
 		return 0, err
 	}
-	return c.Conn.Write(p)
+	return conn.Conn.Write(p)
 }
