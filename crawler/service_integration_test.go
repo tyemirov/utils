@@ -77,6 +77,8 @@ func (processor *stubResponseProcessor) SendFinalResult(resp *colly.Response, su
 
 func (processor *stubResponseProcessor) SetResultCallback(func(*colly.Response)) {}
 
+func (processor *stubResponseProcessor) SetResponseHandlers([]ResponseHandler) {}
+
 func TestNewCollectorEnablesTLSVerificationByDefault(t *testing.T) {
 	t.Parallel()
 

@@ -85,6 +85,73 @@ func ensureRequestHeaders(provider RequestHeaderProvider) RequestHeaderProvider 
 	return provider
 }
 
+// ResponseHandler extends the crawling pipeline with domain-specific behaviour.
+// Implementations are called at specific points during response processing.
+type ResponseHandler interface {
+	// HandleBinaryResponse processes non-HTML responses (e.g. images).
+	// Return true to indicate the response was handled and stop further processing.
+	HandleBinaryResponse(resp *colly.Response, productID string, fileExtension string) bool
+
+	// BeforeEvaluation is called after HTML parsing and content validation but
+	// before rule evaluation. Use for tasks like image retrieval.
+	BeforeEvaluation(resp *colly.Response, document *goquery.Document)
+
+	// AfterEvaluation is called after rule evaluation and result emission.
+	// Use for tasks like discoverability probing or file persistence.
+	AfterEvaluation(resp *colly.Response, document *goquery.Document, result *Result)
+}
+
+// NoopResponseHandler provides default no-op implementations of ResponseHandler.
+type NoopResponseHandler struct{}
+
+// HandleBinaryResponse returns false, indicating the response was not handled.
+func (NoopResponseHandler) HandleBinaryResponse(*colly.Response, string, string) bool { return false }
+
+// BeforeEvaluation does nothing.
+func (NoopResponseHandler) BeforeEvaluation(*colly.Response, *goquery.Document) {}
+
+// AfterEvaluation does nothing.
+func (NoopResponseHandler) AfterEvaluation(*colly.Response, *goquery.Document, *Result) {}
+
+// ServiceHook provides lifecycle callbacks for the crawler service.
+type ServiceHook interface {
+	// AfterInit is called after the collector, transport, and response processor
+	// are fully wired. Use for binding domain-specific network configuration.
+	AfterInit(collector *colly.Collector, transport http.RoundTripper)
+
+	// BeforeRun is called before the product visit loop starts.
+	BeforeRun(ctx context.Context)
+
+	// AfterRun is called after all products have been visited and the collector
+	// has finished. Use for cleanup (e.g. stopping image converter workers).
+	AfterRun()
+}
+
+type noopServiceHook struct{}
+
+func (noopServiceHook) AfterInit(*colly.Collector, http.RoundTripper) {}
+func (noopServiceHook) BeforeRun(context.Context)                     {}
+func (noopServiceHook) AfterRun()                                     {}
+
+// ServiceOption configures a Service during construction.
+type ServiceOption func(*Service)
+
+// WithResponseHandlers registers ResponseHandlers that extend the crawling pipeline.
+func WithResponseHandlers(handlers ...ResponseHandler) ServiceOption {
+	return func(service *Service) {
+		service.responseHandlers = append(service.responseHandlers, handlers...)
+	}
+}
+
+// WithServiceHook registers a lifecycle hook for the crawler service.
+func WithServiceHook(hook ServiceHook) ServiceOption {
+	return func(service *Service) {
+		if hook != nil {
+			service.serviceHook = hook
+		}
+	}
+}
+
 type RequestHook interface {
 	BeforeRequest(ctx context.Context, product Product) error
 }

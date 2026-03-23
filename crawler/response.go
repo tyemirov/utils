@@ -38,6 +38,7 @@ type ResponseProcessor interface {
 	Setup(collector *colly.Collector)
 	SendFinalResult(resp *colly.Response, success bool, errorText string)
 	SetResultCallback(callback func(*colly.Response))
+	SetResponseHandlers(handlers []ResponseHandler)
 }
 
 type responseProcessor struct {
@@ -54,6 +55,7 @@ type responseProcessor struct {
 	collector                        *colly.Collector
 	logger                           Logger
 	resultCallback                   func(*colly.Response)
+	responseHandlers                 []ResponseHandler
 	imageQueue                       chan<- imageJob
 	imageEncoder                     ImageEncoder
 	imageStatusHook                  ImageStatusHook
@@ -127,6 +129,13 @@ func (processor *responseProcessor) handleResponse(resp *colly.Response) {
 
 	productID := getProductIDFromContext(resp)
 	fileExtension := filepath.Ext(resp.FileName())
+
+	for _, handler := range processor.responseHandlers {
+		if handler.HandleBinaryResponse(resp, productID, fileExtension) {
+			return
+		}
+	}
+
 	if productID != unknownProductID && isKnownImageExtension(fileExtension) {
 		if !looksLikeImagePayload(resp.Headers.Get("Content-Type"), resp.Body) {
 			processor.logger.Warning(
@@ -230,6 +239,10 @@ func (processor *responseProcessor) handleResponse(resp *colly.Response) {
 		processor.recordProxySuccess(resp)
 	}
 
+	for _, handler := range processor.responseHandlers {
+		handler.BeforeEvaluation(resp, document)
+	}
+
 	if processor.scraperConfig.RetrieveProductImages {
 		imageURL, err := processor.getProductImage(resp, document, productID)
 		if err != nil {
@@ -264,7 +277,16 @@ func (processor *responseProcessor) handleResponse(resp *colly.Response) {
 	}
 
 	resp.Ctx.Put(ctxProductRulesKey, evaluation)
-	processor.SendFinalResult(resp, true, "")
+	result := processor.buildResult(resp, true, "")
+
+	for _, handler := range processor.responseHandlers {
+		handler.AfterEvaluation(resp, document, result)
+	}
+
+	if processor.resultCallback != nil {
+		processor.resultCallback(resp)
+	}
+	processor.results <- result
 
 	if processor.scraperConfig.SaveFiles {
 		processor.logger.Debug("Saving HTML for %s product %s", processor.platformID, productID)
@@ -277,6 +299,10 @@ func (processor *responseProcessor) handleResponse(resp *colly.Response) {
 
 func (processor *responseProcessor) SetResultCallback(callback func(*colly.Response)) {
 	processor.resultCallback = callback
+}
+
+func (processor *responseProcessor) SetResponseHandlers(handlers []ResponseHandler) {
+	processor.responseHandlers = handlers
 }
 
 func (processor *responseProcessor) recordProxySuccess(resp *colly.Response) {

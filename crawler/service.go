@@ -25,6 +25,8 @@ type Service struct {
 	ctxMu               sync.RWMutex
 	runCtx              context.Context
 	productSlots        chan struct{}
+	responseHandlers    []ResponseHandler
+	serviceHook         ServiceHook
 	imageQueue          chan imageJob
 	stopImageConverter  func()
 }
@@ -32,7 +34,8 @@ type Service struct {
 const defaultCollyRequestTimeout = 10 * time.Second
 
 // NewService constructs a crawler service configured for a platform.
-func NewService(cfg Config, results chan<- *Result) (*Service, error) {
+// ServiceOption values customize the service with response handlers and lifecycle hooks.
+func NewService(cfg Config, results chan<- *Result, options ...ServiceOption) (*Service, error) {
 	if results == nil {
 		return nil, fmt.Errorf("crawler: results channel is required")
 	}
@@ -96,16 +99,24 @@ func NewService(cfg Config, results chan<- *Result) (*Service, error) {
 		logger:              logger,
 		requestHook:         requestHook,
 		productSlots:        make(chan struct{}, cfg.Scraper.Parallelism),
+		serviceHook:         noopServiceHook{},
 		imageQueue:          imageQueue,
 		stopImageConverter:  stopImageConverter,
 	}
 
+	for _, option := range options {
+		option(service)
+	}
+
 	responseProcessor.SetResultCallback(service.releaseProductSlot)
+	responseProcessor.SetResponseHandlers(service.responseHandlers)
 
 	contextTransport := newContextAwareTransport(transport, service.currentRunContext)
 	panicSafeTransport := newPanicSafeTransport(contextTransport, logger)
 	collector.WithTransport(panicSafeTransport)
 	bindDiscoverabilityProberNetwork(cfg, panicSafeTransport)
+
+	service.serviceHook.AfterInit(collector, panicSafeTransport)
 
 	return service, nil
 }
@@ -150,6 +161,8 @@ func (service *Service) Run(ctx context.Context, products []Product) error {
 		runCtx = context.Background()
 	}
 
+	service.serviceHook.BeforeRun(runCtx)
+
 	for _, product := range products {
 		select {
 		case <-runCtx.Done():
@@ -167,6 +180,8 @@ func (service *Service) Run(ctx context.Context, products []Product) error {
 
 Cleanup:
 	service.collector.Wait()
+
+	service.serviceHook.AfterRun()
 
 	if service.stopImageConverter != nil {
 		service.stopImageConverter()
