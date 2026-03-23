@@ -3,144 +3,62 @@ package crawler
 import (
 	"bytes"
 	"fmt"
-	"net/http"
 	"strings"
 
 	"github.com/PuerkitoBio/goquery"
 	"github.com/gocolly/colly/v2"
 )
 
-// DefaultResponseHandler processes HTTP responses using an Evaluator.
-// It parses HTML, extracts the title, runs the evaluator, and emits Results.
-type DefaultResponseHandler struct {
-	evaluator     Evaluator
-	platformHooks PlatformHooks
-	retryHandler  RetryHandler
-	proxyTracker  ProxyHealth
-	filePersister FilePersister
-	results       chan<- *Result
-	category      string
-	logger        Logger
-	scraperCfg    ScraperConfig
-	slotReleaser  func(*colly.Response)
+type defaultResponseProcessor struct {
+	config         Config
+	retryHandler   RetryHandler
+	proxyTracker   proxyHealth
+	filePersister  FilePersister
+	results        chan<- *Result
+	logger         Logger
+	resultCallback func(*colly.Response)
 }
 
-// NewDefaultResponseHandler creates the standard response handler.
-func NewDefaultResponseHandler(
-	cfg Config,
-	retryHandler RetryHandler,
-	proxyTracker ProxyHealth,
-	filePersister FilePersister,
-	results chan<- *Result,
-	logger Logger,
-) *DefaultResponseHandler {
-	return &DefaultResponseHandler{
-		evaluator:     cfg.Evaluator,
-		platformHooks: ensurePlatformHooks(cfg.PlatformHooks),
+func newDefaultResponseProcessor(cfg Config, retryHandler RetryHandler, proxyTracker proxyHealth, filePersister FilePersister, results chan<- *Result, logger Logger) ResponseProcessor {
+	return &defaultResponseProcessor{
+		config:        cfg,
 		retryHandler:  retryHandler,
 		proxyTracker:  proxyTracker,
 		filePersister: filePersister,
 		results:       results,
-		category:      cfg.Category,
 		logger:        logger,
-		scraperCfg:    cfg.Scraper,
 	}
 }
 
-func (h *DefaultResponseHandler) Setup(collector *colly.Collector) {
-	collector.OnResponse(h.handleResponse)
+func (processor *defaultResponseProcessor) Setup(collector *colly.Collector) {
+	collector.OnResponse(processor.handleResponse)
 }
 
-func (h *DefaultResponseHandler) SetSlotReleaser(releaser func(*colly.Response)) {
-	h.slotReleaser = releaser
+func (processor *defaultResponseProcessor) SetResultCallback(callback func(*colly.Response)) {
+	processor.resultCallback = callback
 }
 
-func (h *DefaultResponseHandler) SendResult(resp *colly.Response, success bool, errorMessage string) {
-	if h.slotReleaser != nil {
-		h.slotReleaser(resp)
-	}
-	result := h.buildResult(resp, success, errorMessage)
-	h.results <- result
-}
-
-func (h *DefaultResponseHandler) handleResponse(resp *colly.Response) {
-	targetID := GetTargetIDFromContext(resp)
-	targetURL := GetTargetURLFromContext(resp)
-
-	doc, err := ParseHTMLResponse(resp.Body)
-	if err != nil {
-		h.SendResult(resp, false, fmt.Sprintf("parse error: %v", err))
-		return
+func (processor *defaultResponseProcessor) SendFinalResult(resp *colly.Response, success bool, errorText string) {
+	if processor.resultCallback != nil {
+		processor.resultCallback(resp)
 	}
 
-	title := ExtractTitle(doc)
-	title = h.platformHooks.NormalizeTitle(title)
+	productID := GetProductIDFromContext(resp)
+	productURL := GetContextValue(resp.Ctx, ctxProductURLKey, unknownURLValue)
+	productPlatform := GetContextValue(resp.Ctx, ctxProductPlatformKey, unknownPlatformValue)
 
-	// Check if platform wants a retry
-	decision := h.platformHooks.ShouldRetry(title, doc)
-	if decision.ShouldRetry {
-		h.logger.Info("Platform retry requested for %s: %s", targetID, decision.ResolvedLogMessage())
-		opts := RetryOptions{}
-		if decision.Policy == RetryPolicyRotateProxy {
-			opts.SkipDelay = true
-		}
-		if h.retryHandler.Retry(resp, opts) {
-			return
-		}
-		if decision.ExhaustionBehavior == RetryExhaustionBehaviorFail {
-			h.SendResult(resp, false, decision.Message)
-			return
-		}
+	statusCode := resp.StatusCode
+	switch value := resp.Ctx.GetAny(ctxHTTPStatusCodeKey).(type) {
+	case int:
+		statusCode = value
+	case int32:
+		statusCode = int(value)
+	case int64:
+		statusCode = int(value)
+	case float64:
+		statusCode = int(value)
 	}
 
-	// Persist HTML if configured
-	if h.filePersister != nil && h.scraperCfg.SaveFiles {
-		if err := h.filePersister.Save(targetID, targetID+"."+HTMLExtension, resp.Body); err != nil {
-			h.logger.Error("Failed to persist HTML for %s: %v", targetID, err)
-		}
-	}
-
-	// Run evaluator
-	eval, evalErr := h.evaluator.Evaluate(targetID, doc)
-	if evalErr != nil {
-		h.logger.Error("Evaluator error for %s: %v", targetID, evalErr)
-	}
-
-	finalURL := ""
-	if resp.Request != nil && resp.Request.URL != nil {
-		finalURL = resp.Request.URL.String()
-	}
-	canonicalURL := ExtractCanonicalURL(doc)
-	proxyURL := ""
-	if resp.Request != nil {
-		proxyURL = resp.Request.ProxyURL
-	}
-
-	result := &Result{
-		TargetID:       targetID,
-		TargetURL:      targetURL,
-		FinalURL:       finalURL,
-		CanonicalURL:   canonicalURL,
-		Category:       h.category,
-		Title:          title,
-		Success:        evalErr == nil,
-		ErrorMessage:   errorText(evalErr),
-		HTTPStatusCode: resp.StatusCode,
-		Findings:       eval.Findings,
-		Document:       doc,
-		ProxyURL:       strings.TrimSpace(proxyURL),
-	}
-
-	if h.slotReleaser != nil {
-		h.slotReleaser(resp)
-	}
-	h.results <- result
-}
-
-func (h *DefaultResponseHandler) buildResult(resp *colly.Response, success bool, errorMessage string) *Result {
-	targetID := GetTargetIDFromContext(resp)
-	targetURL := GetTargetURLFromContext(resp)
-	category := GetTargetCategoryFromContext(resp)
 	finalURL := ""
 	if resp.Request != nil && resp.Request.URL != nil {
 		finalURL = resp.Request.URL.String()
@@ -149,130 +67,113 @@ func (h *DefaultResponseHandler) buildResult(resp *colly.Response, success bool,
 	if resp.Request != nil {
 		proxyURL = resp.Request.ProxyURL
 	}
-	return &Result{
-		TargetID:       targetID,
-		TargetURL:      targetURL,
-		FinalURL:       finalURL,
-		Category:       category,
-		Success:        success,
-		ErrorMessage:   errorMessage,
-		HTTPStatusCode: resp.StatusCode,
-		ProxyURL:       strings.TrimSpace(proxyURL),
+
+	processor.results <- &Result{
+		ProductID:       productID,
+		ProductURL:      productURL,
+		ProductPlatform: productPlatform,
+		FinalURL:        finalURL,
+		ProxyURL:        strings.TrimSpace(proxyURL),
+		Success:         success,
+		ErrorMessage:    errorText,
+		HTTPStatusCode:  statusCode,
+		ProductTitle:    GetContextValue(resp.Ctx, ctxProductTitleKey, titleNotFoundMessage),
 	}
 }
 
-// --- Exported helpers for custom ResponseHandler implementations ---
+func (processor *defaultResponseProcessor) handleResponse(resp *colly.Response) {
+	productID := GetProductIDFromContext(resp)
 
-// ParseHTMLResponse parses HTML from a response body.
-func ParseHTMLResponse(body []byte) (*goquery.Document, error) {
-	return goquery.NewDocumentFromReader(bytes.NewReader(body))
-}
-
-// ExtractTitle returns the text content of the first <title> element.
-func ExtractTitle(doc *goquery.Document) string {
-	return strings.TrimSpace(doc.Find("title").First().Text())
-}
-
-// ExtractCanonicalURL extracts the canonical URL from a <link rel="canonical"> tag.
-func ExtractCanonicalURL(doc *goquery.Document) string {
-	canonical, _ := doc.Find(`link[rel="canonical"]`).Attr("href")
-	return strings.TrimSpace(canonical)
-}
-
-// GetTargetIDFromContext retrieves the target ID from a Colly response context.
-func GetTargetIDFromContext(resp *colly.Response) string {
-	if resp == nil || resp.Ctx == nil {
-		return ""
-	}
-	return resp.Ctx.Get(CtxTargetIDKey)
-}
-
-// GetTargetURLFromContext retrieves the target URL from a Colly response context.
-func GetTargetURLFromContext(resp *colly.Response) string {
-	if resp == nil || resp.Ctx == nil {
-		return UnknownURL
-	}
-	v := resp.Ctx.Get(CtxTargetURLKey)
-	if v == "" {
-		return UnknownURL
-	}
-	return v
-}
-
-// GetTargetCategoryFromContext retrieves the target category from a Colly response context.
-func GetTargetCategoryFromContext(resp *colly.Response) string {
-	if resp == nil || resp.Ctx == nil {
-		return ""
-	}
-	return resp.Ctx.Get(CtxTargetCategoryKey)
-}
-
-// GetContextValue returns a value from a Colly context, or the fallback if absent.
-func GetContextValue(ctx *colly.Context, key, fallback string) string {
-	if ctx == nil {
-		return fallback
-	}
-	v := ctx.Get(key)
-	if v == "" {
-		return fallback
-	}
-	return v
-}
-
-func errorText(err error) string {
-	if err == nil {
-		return ""
-	}
-	return err.Error()
-}
-
-// RecordProxyFailure records a proxy failure on the tracker if applicable.
-func RecordProxyFailure(tracker ProxyHealth, resp *colly.Response) {
-	if tracker == nil || resp == nil || resp.Request == nil {
+	document, parseError := goquery.NewDocumentFromReader(bytes.NewReader(resp.Body))
+	if parseError != nil {
+		processor.SendFinalResult(resp, false, fmt.Sprintf("html parse error: %v", parseError))
 		return
 	}
-	if resp.Request.ProxyURL == "" || resp.StatusCode != 0 {
-		return
+
+	documentTitle := extractDocumentTitle(document)
+	platformHooks := ensurePlatformHooks(processor.config.PlatformHooks)
+	normalizedTitle := platformHooks.NormalizeTitle(documentTitle)
+	resp.Ctx.Put(ctxProductTitleKey, normalizedTitle)
+
+	retryDecision := platformHooks.ShouldRetry(normalizedTitle, document)
+	if retryDecision.ShouldRetry {
+		retryOptions := RetryOptions{}
+		if retryDecision.Policy == RetryPolicyRotateProxy {
+			retryOptions.SkipDelay = true
+		}
+		if processor.retryHandler.Retry(resp, retryOptions) {
+			return
+		}
+		if retryDecision.ExhaustionBehavior == RetryExhaustionBehaviorFail {
+			processor.SendFinalResult(resp, false, retryDecision.Message)
+			return
+		}
 	}
-	tracker.RecordFailure(resp.Request.ProxyURL)
+
+	if processor.proxyTracker != nil && resp.Request != nil && resp.Request.ProxyURL != "" {
+		processor.proxyTracker.RecordSuccess(resp.Request.ProxyURL)
+	}
+
+	if processor.filePersister != nil && processor.config.Scraper.SaveFiles {
+		fileName := productID + "." + htmlExtension
+		if saveError := processor.filePersister.Save(productID, fileName, resp.Body); saveError != nil {
+			processor.logger.Error("Failed to save HTML for %s: %v", productID, saveError)
+		}
+	}
+
+	var ruleResults []RuleResult
+	configuredVerifierCount := 0
+	if processor.config.RuleEvaluator != nil {
+		evaluation, evaluationError := processor.config.RuleEvaluator.Evaluate(productID, document)
+		if evaluationError != nil {
+			processor.logger.Error("Rule evaluation failed for %s: %v", productID, evaluationError)
+		} else {
+			ruleResults = evaluation.RuleResults
+			configuredVerifierCount = evaluation.ConfiguredVerifier
+		}
+	}
+
+	canonicalURL := extractCanonicalURL(document)
+	finalURL := ""
+	if resp.Request != nil && resp.Request.URL != nil {
+		finalURL = resp.Request.URL.String()
+	}
+	proxyURL := ""
+	if resp.Request != nil {
+		proxyURL = resp.Request.ProxyURL
+	}
+
+	if processor.resultCallback != nil {
+		processor.resultCallback(resp)
+	}
+
+	processor.results <- &Result{
+		ProductID:               productID,
+		ProductURL:              GetContextValue(resp.Ctx, ctxProductURLKey, unknownURLValue),
+		ProductPlatform:         GetContextValue(resp.Ctx, ctxProductPlatformKey, unknownPlatformValue),
+		ProductTitle:            normalizedTitle,
+		FinalURL:                finalURL,
+		CanonicalURL:            canonicalURL,
+		ProxyURL:                strings.TrimSpace(proxyURL),
+		Success:                 true,
+		HTTPStatusCode:          resp.StatusCode,
+		RuleResults:             ruleResults,
+		ConfiguredVerifierCount: configuredVerifierCount,
+	}
 }
 
-// SetupErrorHandling wires OnError with retry and proxy tracking.
-func SetupErrorHandling(collector *colly.Collector, handler ResponseHandler, retryHandler RetryHandler, tracker ProxyHealth, logger Logger) {
-	collector.OnError(func(resp *colly.Response, err error) {
-		RecordProxyFailure(tracker, resp)
-		url := UnknownURL
-		if resp != nil && resp.Request != nil && resp.Request.URL != nil {
-			url = resp.Request.URL.String()
-		}
-		statusCode := 0
-		if resp != nil {
-			statusCode = resp.StatusCode
-		}
-		logger.Error("URL: %s, StatusCode: %d, Error: %v", url, statusCode, err)
+func extractDocumentTitle(document *goquery.Document) string {
+	titleElement := document.Find(htmlTitleTag).First()
+	rawTitle := titleElement.Text()
+	return normalizeTitleWhitespace(rawTitle)
+}
 
-		if resp == nil {
-			return
-		}
-		if resp.Ctx == nil {
-			resp.Ctx = colly.NewContext()
-		}
+func normalizeTitleWhitespace(rawTitle string) string {
+	normalized := strings.Join(strings.Fields(rawTitle), " ")
+	return strings.TrimSpace(normalized)
+}
 
-		errText := ""
-		if err != nil {
-			errText = err.Error()
-		}
-
-		if resp.StatusCode == http.StatusNotFound {
-			handler.SendResult(resp, false, errText)
-			return
-		}
-		if resp.Request == nil || resp.Request.URL == nil {
-			handler.SendResult(resp, false, errText)
-			return
-		}
-		if !retryHandler.Retry(resp, RetryOptions{}) {
-			handler.SendResult(resp, false, errText)
-		}
-	})
+func extractCanonicalURL(document *goquery.Document) string {
+	canonicalHref, _ := document.Find(`link[rel="canonical"]`).Attr("href")
+	return strings.TrimSpace(canonicalHref)
 }

@@ -6,7 +6,6 @@ import (
 	"github.com/PuerkitoBio/goquery"
 )
 
-// RetryPolicy controls how retries are performed.
 type RetryPolicy uint8
 
 const (
@@ -14,7 +13,6 @@ const (
 	RetryPolicyRotateProxy
 )
 
-// RetryExhaustionBehavior controls what happens when retries are exhausted.
 type RetryExhaustionBehavior uint8
 
 const (
@@ -22,7 +20,6 @@ const (
 	RetryExhaustionBehaviorContinue
 )
 
-// RetryDecision captures the outcome of a platform retry check.
 type RetryDecision struct {
 	ShouldRetry        bool
 	Message            string
@@ -31,12 +28,11 @@ type RetryDecision struct {
 	ExhaustionBehavior RetryExhaustionBehavior
 }
 
-// ResolvedLogMessage returns the log message or falls back to the message.
-func (d RetryDecision) ResolvedLogMessage() string {
-	if msg := strings.TrimSpace(d.LogMessage); msg != "" {
-		return msg
+func (decision RetryDecision) ResolvedLogMessage() string {
+	if message := strings.TrimSpace(decision.LogMessage); message != "" {
+		return message
 	}
-	return strings.TrimSpace(d.Message)
+	return strings.TrimSpace(decision.Message)
 }
 
 // PlatformHooks provide platform-specific normalisation and retry logic.

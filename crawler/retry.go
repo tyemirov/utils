@@ -8,6 +8,17 @@ import (
 	"github.com/gocolly/colly/v2"
 )
 
+// RetryHandler encapsulates retry behaviour for failed responses.
+type RetryHandler interface {
+	Retry(response *colly.Response, options RetryOptions) bool
+}
+
+type RetryOptions struct {
+	SkipDelay    bool
+	LimitRetries bool
+	MaxRetries   int
+}
+
 type retryHandler struct {
 	maxRetries    int
 	logger        Logger
@@ -15,8 +26,7 @@ type retryHandler struct {
 	sleepFn       func(time.Duration)
 }
 
-// NewRetryHandler constructs a retry handler from scraper config.
-func NewRetryHandler(scraper ScraperConfig, logger Logger) RetryHandler {
+func newRetryHandler(scraper ScraperConfig, logger Logger) RetryHandler {
 	return &retryHandler{
 		maxRetries:    scraper.RetryCount,
 		logger:        logger,
@@ -25,45 +35,48 @@ func NewRetryHandler(scraper ScraperConfig, logger Logger) RetryHandler {
 	}
 }
 
-func (h *retryHandler) Retry(response *colly.Response, options RetryOptions) bool {
-	maxRetries := h.effectiveMaxRetries(options)
+func (handler *retryHandler) Retry(response *colly.Response, options RetryOptions) bool {
+	maxRetries := handler.effectiveMaxRetries(options)
 	if maxRetries == 0 {
 		return false
 	}
-	if hasRetried, ok := response.Ctx.GetAny(RetriedFlagKey).(bool); ok && hasRetried {
-		h.logger.Debug("Skipping retry for %s; already retried.", response.Request.URL.String())
+
+	if hasRetried, ok := response.Ctx.GetAny(retriedFlagKey).(bool); ok && hasRetried {
+		handler.logger.Debug("Skipping retry for %s; already retried.", response.Request.URL.String())
 		return false
 	}
-	attempt := GetRetryAttempt(response)
+
+	attempt := getRetryAttempt(response)
 	if attempt >= maxRetries {
-		h.logger.Error("No retries left for URL: %s", response.Request.URL.String())
-		response.Ctx.Put(RetriedFlagKey, true)
+		handler.logger.Error("No retries left for URL: %s", response.Request.URL.String())
+		response.Ctx.Put(retriedFlagKey, true)
 		return false
 	}
+
 	nextAttempt := attempt + 1
-	if h.shouldDelay(nextAttempt, options) {
-		h.sleep(h.backoffDuration(attempt))
+	if handler.shouldDelay(nextAttempt, options) {
+		handler.sleep(handler.backoffDuration(attempt))
 	}
-	response.Ctx.Put(RetryCountKey, nextAttempt)
+
+	response.Ctx.Put(retryCountKey, nextAttempt)
 	if err := response.Request.Retry(); err != nil {
-		h.logger.Error("Failed to retry URL: %s, Error: %v", response.Request.URL.String(), err)
+		handler.logger.Error("Failed to retry URL: %s, Error: %v", response.Request.URL.String(), err)
 		return false
 	}
-	h.logger.Debug("Retrying URL %s; %d retries left.", response.Request.URL.String(), maxRetries-attempt-1)
+	handler.logger.Debug("Retrying URL %s; %d retries left.", response.Request.URL.String(), maxRetries-attempt-1)
 	return true
 }
 
-// GetRetryAttempt returns the current retry attempt from the response context.
-func GetRetryAttempt(response *colly.Response) int {
-	if retries, ok := response.Ctx.GetAny(RetryCountKey).(int); ok {
+func getRetryAttempt(response *colly.Response) int {
+	if retries, ok := response.Ctx.GetAny(retryCountKey).(int); ok {
 		return retries
 	}
 	return 0
 }
 
-func (h *retryHandler) effectiveMaxRetries(options RetryOptions) int {
-	if !options.LimitRetries || options.MaxRetries >= h.maxRetries {
-		return h.maxRetries
+func (handler *retryHandler) effectiveMaxRetries(options RetryOptions) int {
+	if !options.LimitRetries || options.MaxRetries >= handler.maxRetries {
+		return handler.maxRetries
 	}
 	if options.MaxRetries < 0 {
 		return 0
@@ -71,26 +84,26 @@ func (h *retryHandler) effectiveMaxRetries(options RetryOptions) int {
 	return options.MaxRetries
 }
 
-func (h *retryHandler) shouldDelay(nextAttempt int, options RetryOptions) bool {
+func (handler *retryHandler) shouldDelay(nextAttempt int, options RetryOptions) bool {
 	if options.SkipDelay {
 		return false
 	}
-	if h.proxyPoolSize <= 1 {
+	if handler.proxyPoolSize <= 1 {
 		return true
 	}
-	return nextAttempt%h.proxyPoolSize == 0
+	return nextAttempt%handler.proxyPoolSize == 0
 }
 
-func (h *retryHandler) backoffDuration(attempt int) time.Duration {
+func (handler *retryHandler) backoffDuration(attempt int) time.Duration {
 	backoff := time.Second * time.Duration(math.Pow(2, float64(attempt+1)))
 	jitter := time.Duration(rand.Int63n(int64(backoff / 4)))
 	return backoff + jitter
 }
 
-func (h *retryHandler) sleep(duration time.Duration) {
-	if h.sleepFn == nil {
+func (handler *retryHandler) sleep(duration time.Duration) {
+	if handler.sleepFn == nil {
 		time.Sleep(duration)
 		return
 	}
-	h.sleepFn(duration)
+	handler.sleepFn(duration)
 }
