@@ -2,45 +2,46 @@ package crawler
 
 import "strings"
 
-// SanitizeProxyURL strips credentials from a proxy URL for safe logging.
-func SanitizeProxyURL(rawProxyURL string) string {
-	normalized := strings.TrimSpace(rawProxyURL)
-	if normalized == "" {
+func sanitizeProxyURL(rawProxyURL string) string {
+	normalizedProxyURL := strings.TrimSpace(rawProxyURL)
+	if normalizedProxyURL == "" {
 		return ""
 	}
-	schemeSep := strings.Index(normalized, "://")
-	if schemeSep < 0 {
-		return normalized
+	schemeSeparatorIndex := strings.Index(normalizedProxyURL, "://")
+	if schemeSeparatorIndex < 0 {
+		return normalizedProxyURL
 	}
-	authStart := schemeSep + len("://")
-	authEnd := len(normalized)
-	tail := normalized[authStart:]
-	if idx := strings.Index(tail, "/"); idx >= 0 && authStart+idx < authEnd {
-		authEnd = authStart + idx
+	authorityStartIndex := schemeSeparatorIndex + len("://")
+	authorityEndIndex := len(normalizedProxyURL)
+	authorityAndTail := normalizedProxyURL[authorityStartIndex:]
+	pathStartIndex := strings.Index(authorityAndTail, "/")
+	if pathStartIndex >= 0 && authorityStartIndex+pathStartIndex < authorityEndIndex {
+		authorityEndIndex = authorityStartIndex + pathStartIndex
 	}
-	if idx := strings.Index(tail, "?"); idx >= 0 && authStart+idx < authEnd {
-		authEnd = authStart + idx
+	queryStartIndex := strings.Index(authorityAndTail, "?")
+	if queryStartIndex >= 0 && authorityStartIndex+queryStartIndex < authorityEndIndex {
+		authorityEndIndex = authorityStartIndex + queryStartIndex
 	}
-	if idx := strings.Index(tail, "#"); idx >= 0 && authStart+idx < authEnd {
-		authEnd = authStart + idx
+	fragmentStartIndex := strings.Index(authorityAndTail, "#")
+	if fragmentStartIndex >= 0 && authorityStartIndex+fragmentStartIndex < authorityEndIndex {
+		authorityEndIndex = authorityStartIndex + fragmentStartIndex
 	}
-	authority := normalized[authStart:authEnd]
-	userInfoSep := strings.LastIndex(authority, "@")
-	if userInfoSep < 0 {
-		return normalized
+	authority := normalizedProxyURL[authorityStartIndex:authorityEndIndex]
+	userInfoSeparatorIndex := strings.LastIndex(authority, "@")
+	if userInfoSeparatorIndex < 0 {
+		return normalizedProxyURL
 	}
-	sanitized := authority[userInfoSep+1:]
-	if strings.TrimSpace(sanitized) == "" {
-		return normalized
+	sanitizedAuthority := authority[userInfoSeparatorIndex+1:]
+	if strings.TrimSpace(sanitizedAuthority) == "" {
+		return normalizedProxyURL
 	}
-	return normalized[:authStart] + sanitized + normalized[authEnd:]
+	return normalizedProxyURL[:authorityStartIndex] + sanitizedAuthority + normalizedProxyURL[authorityEndIndex:]
 }
 
-// DescribeProxyForLog returns a safe-to-log proxy description.
-func DescribeProxyForLog(rawProxyURL string) string {
-	sanitized := SanitizeProxyURL(rawProxyURL)
-	if sanitized == "" {
+func describeProxyForLog(rawProxyURL string) string {
+	sanitizedProxyURL := sanitizeProxyURL(rawProxyURL)
+	if sanitizedProxyURL == "" {
 		return "direct"
 	}
-	return sanitized
+	return sanitizedProxyURL
 }

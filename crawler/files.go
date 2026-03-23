@@ -7,36 +7,39 @@ import (
 	"strings"
 )
 
-// NewDirectoryFilePersister creates a file persister that writes to disk.
-func NewDirectoryFilePersister(rootDirectory, category, runFolder string) FilePersister {
+type directoryFilePersister struct {
+	rootDirectory string
+	platformID    string
+	runFolder     string
+}
+
+func newDirectoryFilePersister(rootDirectory, platformID, runFolder string) FilePersister {
 	return &directoryFilePersister{
 		rootDirectory: rootDirectory,
-		category:      category,
+		platformID:    platformID,
 		runFolder:     runFolder,
 	}
 }
 
-type directoryFilePersister struct {
-	rootDirectory string
-	category      string
-	runFolder     string
-}
-
-func (p *directoryFilePersister) Save(targetID, fileName string, content []byte) error {
-	if p == nil || p.rootDirectory == "" || p.category == "" {
+func (persister *directoryFilePersister) Save(productID, fileName string, content []byte) error {
+	if persister == nil {
 		return nil
 	}
-	runFolder := strings.TrimSpace(p.runFolder)
+	if persister.rootDirectory == "" || persister.platformID == "" {
+		return nil
+	}
+	runFolder := strings.TrimSpace(persister.runFolder)
 	if runFolder == "" {
 		return fmt.Errorf("crawler: run folder missing")
 	}
-	dir := filepath.Join(p.rootDirectory, p.category, targetID, runFolder)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	productDirectory := filepath.Join(persister.rootDirectory, persister.platformID, productID, runFolder)
+	if err := os.MkdirAll(productDirectory, 0o755); err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(dir, fileName), content, 0o644)
+	outputPath := filepath.Join(productDirectory, fileName)
+	return os.WriteFile(outputPath, content, 0o644)
 }
 
-func (p *directoryFilePersister) Close() error {
+func (persister *directoryFilePersister) Close() error {
 	return nil
 }

@@ -1,25 +1,31 @@
 package crawler
 
 const (
-	// Context keys for Colly request context.
-	CtxTargetIDKey       = "crawler_target_id"
-	CtxTargetCategoryKey = "crawler_target_category"
-	CtxTargetURLKey      = "crawler_target_url"
-	CtxRunContextKey     = "crawler_run_context"
-	CtxHTTPStatusCodeKey = "crawler_http_status"
-	CtxErrorKey          = "crawler_error"
-	CtxEvaluationKey     = "crawler_evaluation"
-	CtxTitleKey          = "crawler_title"
-	CtxInitialURLKey     = "crawler_initial_url"
-	CtxFinalURLKey       = "crawler_final_url"
-	CtxCanonicalURLKey   = "crawler_canonical_url"
-	CtxRedirectedKey     = "crawler_redirected"
-	CtxNotFoundKey       = "crawler_not_found"
+	ctxProductIDKey       = "crawler_product_id"
+	ctxProductPlatformKey = "crawler_product_platform"
+	ctxProductURLKey      = "crawler_product_url"
+	ctxRunContextKey      = "crawler_run_context"
+	ctxHTTPStatusCodeKey  = "crawler_http_status"
+	ctxProductErrorKey    = "crawler_product_error"
+	ctxProductRulesKey    = "crawler_product_rules"
+	ctxProductTitleKey    = "crawler_product_title"
+	ctxProductNotFoundFlag = "crawler_product_not_found"
+	ctxInitialURLKey      = "crawler_initial_url"
+	ctxRedirectedKey      = "crawler_redirected"
+	ctxRedirectedProductKey = "crawler_redirected_product_id"
+	ctxFinalURLKey        = "crawler_final_url"
+	ctxCanonicalURLKey    = "crawler_canonical_url"
 
-	RetryCountKey  = "crawler_retry_count"
-	RetriedFlagKey = "crawler_retried"
+	pageNotFoundText     = "Page Not Found"
+	unknownProductID     = "UnknownProductID"
+	htmlTitleTag         = "title"
+	titleNotFoundMessage = "Title Not Found"
 
-	TitleNotFound = "Title Not Found"
-	UnknownURL    = "UnknownURL"
-	HTMLExtension = "html"
+	unknownURLValue      = "UnknownURL"
+	unknownPlatformValue = "UnknownPlatform"
+
+	htmlExtension = "html"
+
+	retryCountKey  = "crawler_retry_count"
+	retriedFlagKey = "crawler_retried"
 )

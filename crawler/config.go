@@ -6,60 +6,53 @@ import (
 	"time"
 )
 
-// Config wires the crawler service with target metadata, scraping options,
-// and effectful collaborators.
+// Config wires the crawler service with platform metadata, scraping options,
+// and effectful collaborators. All fields are mandatory unless marked as optional.
 type Config struct {
-	// Category identifies the target category (e.g., "AMZN", "camps").
-	Category string
+	// PlatformID identifies the target platform (for example "AMZN").
+	PlatformID string
 
 	// Scraper controls concurrency, retries, and network behaviour.
 	Scraper ScraperConfig
 
-	// Platform holds domain-specific settings.
+	// Platform holds domain-specific settings such as allowed hosts.
 	Platform PlatformConfig
 
-	// ResponseHandler processes HTTP responses. Optional; when nil, a default
-	// handler is created using the Evaluator.
-	ResponseHandler ResponseHandler
-
-	// Evaluator produces findings for a fetched document. Required when
-	// ResponseHandler is nil.
-	Evaluator Evaluator
-
-	// PlatformHooks customise title normalisation and retry decisions. Optional.
-	PlatformHooks PlatformHooks
-
-	// CookieProvider returns cookies per domain. Optional.
-	CookieProvider CookieProvider
-
-	// CookieDomains lists domains for which CookieProvider is called.
-	CookieDomains []string
-
-	// FilePersister handles artifact persistence. Optional; a default
-	// implementation is created when OutputDirectory is set.
-	FilePersister FilePersister
-
-	// OutputDirectory is optional; when set and FilePersister is nil the
-	// crawler will persist artifacts under this path.
+	// OutputDirectory is optional; when supplied and FilePersister is nil the
+	// crawler will persist downloaded artifacts under this path.
 	OutputDirectory string
 
 	// RunFolder scopes persisted artifacts for a single execution.
 	RunFolder string
 
-	// Headers customises outbound requests. Optional.
-	Headers HeaderProvider
+	// RuleEvaluator produces rule findings for a fetched document. Mandatory.
+	RuleEvaluator RuleEvaluator
 
-	// Hook runs before each request. Optional.
-	Hook RequestHook
+	// CookieGenerator returns cookies for a given domain. Optional.
+	CookieGenerator CookieGenerator
 
-	// Logger receives diagnostic messages. Optional (no-op if nil).
+	// FilePersister handles file persistence. Optional; a default implementation
+	// is created when OutputDirectory is set.
+	FilePersister FilePersister
+
+	// PlatformHooks customise platform-specific behaviour. Optional.
+	PlatformHooks PlatformHooks
+
+	// RequestHeaders applies custom headers before each outbound request.
+	RequestHeaders RequestHeaderProvider
+
+	// RequestHook runs before each outbound request. Optional.
+	RequestHook RequestHook
+
+	// Logger receives debug/info/warning/error logs. Optional; a no-op logger is
+	// used when nil.
 	Logger Logger
 }
 
 // Validate ensures required configuration is present and self-consistent.
 func (cfg Config) Validate() error {
-	if cfg.Category == "" {
-		return errors.New("crawler: category is required")
+	if cfg.PlatformID == "" {
+		return errors.New("crawler: platform id is required")
 	}
 	if err := cfg.Scraper.Validate(); err != nil {
 		return fmt.Errorf("crawler: invalid scraper config: %w", err)
@@ -67,13 +60,13 @@ func (cfg Config) Validate() error {
 	if err := cfg.Platform.Validate(); err != nil {
 		return fmt.Errorf("crawler: invalid platform config: %w", err)
 	}
-	if cfg.ResponseHandler == nil && cfg.Evaluator == nil {
-		return errors.New("crawler: evaluator is required when no response handler is provided")
+	if cfg.RuleEvaluator == nil {
+		return errors.New("crawler: rule evaluator is required")
 	}
 	return nil
 }
 
-// ScraperConfig controls concurrency, retries, and network behaviour.
+// ScraperConfig exposes concurrency and retry knobs for the crawler.
 type ScraperConfig struct {
 	MaxDepth                   int
 	Parallelism                int
@@ -82,8 +75,8 @@ type ScraperConfig struct {
 	InsecureSkipVerify         bool
 	RateLimit                  time.Duration
 	ProxyList                  []string
-	ProxyCircuitBreakerEnabled bool
 	SaveFiles                  bool
+	ProxyCircuitBreakerEnabled bool
 }
 
 // Validate checks that essential numeric fields are positive.
@@ -103,10 +96,11 @@ func (cfg ScraperConfig) Validate() error {
 	return nil
 }
 
-// PlatformConfig restricts the crawler to known domains.
+// PlatformConfig restricts the crawler to known domains and provides selectors.
 type PlatformConfig struct {
-	AllowedDomains []string
-	CookieDomains  []string
+	AllowedDomains      []string
+	CookieDomains       []string
+	SkipRulesOnRedirect bool
 }
 
 // Validate ensures the platform configuration is usable.

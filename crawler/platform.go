@@ -31,18 +31,23 @@ type RetryDecision struct {
 	ExhaustionBehavior RetryExhaustionBehavior
 }
 
-// ResolvedLogMessage returns the log message or falls back to the message.
-func (d RetryDecision) ResolvedLogMessage() string {
-	if msg := strings.TrimSpace(d.LogMessage); msg != "" {
-		return msg
+// ResolvedLogMessage returns the log message or falls back to the general message.
+func (decision RetryDecision) ResolvedLogMessage() string {
+	if message := strings.TrimSpace(decision.LogMessage); message != "" {
+		return message
 	}
-	return strings.TrimSpace(d.Message)
+	return strings.TrimSpace(decision.Message)
 }
 
-// PlatformHooks provide platform-specific normalisation and retry logic.
+// PlatformHooks provide platform-specific normalisation, content validation,
+// redirect detection, and retry logic. Implementations encapsulate all
+// platform-specific behaviour so the core crawler remains generic.
 type PlatformHooks interface {
 	NormalizeTitle(title string) string
 	ShouldRetry(title string, document *goquery.Document) RetryDecision
+	ExtractDOMTitle(document *goquery.Document) string
+	IsContentComplete(document *goquery.Document) bool
+	InferRedirect(productID, originalURL, finalURL, canonicalURL string) (redirected bool, redirectedProductID string)
 }
 
 type noopPlatformHooks struct{}
@@ -50,6 +55,11 @@ type noopPlatformHooks struct{}
 func (noopPlatformHooks) NormalizeTitle(title string) string { return title }
 func (noopPlatformHooks) ShouldRetry(string, *goquery.Document) RetryDecision {
 	return RetryDecision{}
+}
+func (noopPlatformHooks) ExtractDOMTitle(*goquery.Document) string { return "" }
+func (noopPlatformHooks) IsContentComplete(*goquery.Document) bool { return true }
+func (noopPlatformHooks) InferRedirect(string, string, string, string) (bool, string) {
+	return false, ""
 }
 
 func ensurePlatformHooks(hooks PlatformHooks) PlatformHooks {
