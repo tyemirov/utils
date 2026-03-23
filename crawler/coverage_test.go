@@ -1549,6 +1549,28 @@ func TestRequestConfiguratorWithCookieGenerator(t *testing.T) {
 	configurator.Configure(collector)
 }
 
+func TestRequestConfiguratorSetCookiesError(t *testing.T) {
+	logger := &capturingLogger{}
+	cfg := Config{
+		PlatformID: "TEST",
+		Platform: PlatformConfig{
+			AllowedDomains: []string{"example.com"},
+			CookieDomains:  []string{"example.com"},
+		},
+		CookieGenerator: func(domain string) []*http.Cookie {
+			return []*http.Cookie{{Name: "session", Value: "abc123"}}
+		},
+	}
+	configurator := newRequestConfigurator(cfg, logger).(*requestConfigurator)
+	configurator.setCookies = func(_ string, _ []*http.Cookie) error {
+		return errors.New("cookie jar broken")
+	}
+	collector := colly.NewCollector(colly.AllowURLRevisit())
+	configurator.Configure(collector)
+	require.Len(t, logger.errors, 1)
+	require.Contains(t, logger.errors[0], "cookie jar broken")
+}
+
 func TestRequestConfiguratorWithoutCookieGenerator(t *testing.T) {
 	cfg := Config{
 		PlatformID: "TEST",
@@ -1903,6 +1925,30 @@ func TestRetryHandlerAlreadyRetried(t *testing.T) {
 
 	result := handler.Retry(resp, RetryOptions{})
 	require.False(t, result)
+}
+
+// ─── retry: Retry() returns error when body is unseekable ─────────────────
+
+// nonSeekableReader wraps a reader without implementing io.Seeker,
+// causing colly's Retry() to return ErrRetryBodyUnseekable.
+type nonSeekableReader struct{ r *strings.Reader }
+
+func (n nonSeekableReader) Read(p []byte) (int, error) { return n.r.Read(p) }
+
+func TestRetryHandlerRetryErrorReturnsOnFailure(t *testing.T) {
+	logger := &capturingLogger{}
+	handler := &retryHandler{maxRetries: 3, logger: logger}
+	resp := newTestResponse("P1")
+	pageURL, _ := url.Parse("https://example.com/dp/P1")
+	resp.Request.URL = pageURL
+	resp.Request.Headers = &http.Header{}
+	// Set a non-seekable body so Retry() returns ErrRetryBodyUnseekable
+	resp.Request.Body = nonSeekableReader{r: strings.NewReader("non-seekable body")}
+
+	result := handler.Retry(resp, RetryOptions{})
+	require.False(t, result)
+	require.Len(t, logger.errors, 1)
+	require.Contains(t, logger.errors[0], "Failed to retry URL")
 }
 
 // ─── files.go: MkdirAll error ─────────────────────────────────────────────

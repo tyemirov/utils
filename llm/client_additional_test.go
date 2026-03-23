@@ -488,3 +488,20 @@ func TestClientChatClosesResponseBodyErrorOnClose(t *testing.T) {
 		t.Fatalf("expected close error to be joined, got %v", err)
 	}
 }
+
+func TestClientChatMarshalError(t *testing.T) {
+	client := &Client{
+		baseURL:    "http://example.com",
+		apiKey:     "token",
+		model:      "model",
+		httpClient: stubHTTPClient{},
+		timeout:    time.Second,
+		marshalFn: func(_ interface{}) ([]byte, error) {
+			return nil, errors.New("marshal boom")
+		},
+	}
+	_, err := client.Chat(context.Background(), ChatRequest{Messages: []Message{{Role: "user", Content: "hi"}}})
+	if err == nil || !strings.Contains(err.Error(), "marshal boom") {
+		t.Fatalf("expected marshal error, got %v", err)
+	}
+}

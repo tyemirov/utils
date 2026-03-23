@@ -62,6 +62,24 @@ func TestReporterSkipsEmptyEnvBindings(testingHandle *testing.T) {
 	}
 }
 
+func TestReporterBuildBindEnvError(testingHandle *testing.T) {
+	configPath := writeConfigFile(testingHandle, `key: value`)
+	reporter, err := NewReporter(configPath, []EnvBinding{{Key: "k", Env: "V"}}, passthroughRedactor{})
+	if err != nil {
+		testingHandle.Fatalf("new reporter: %v", err)
+	}
+	reporter.bindEnvFn = func(_ ...string) error {
+		return errors.New("bind env broken")
+	}
+	_, buildErr := reporter.Build(preflight.RedactionModeRedacted)
+	if buildErr == nil {
+		testingHandle.Fatalf("expected bind env error")
+	}
+	if !errors.Is(buildErr, ErrReporter) {
+		testingHandle.Fatalf("expected ErrReporter, got %v", buildErr)
+	}
+}
+
 func TestReporterBuildRedactError(testingHandle *testing.T) {
 	configPath := writeConfigFile(testingHandle, `key: value`)
 	reporter, err := NewReporter(configPath, nil, errorRedactor{err: errors.New("redact fail")})

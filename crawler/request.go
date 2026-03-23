@@ -17,6 +17,8 @@ type requestConfigurator struct {
 	cookieGenerator CookieGenerator
 	headerProvider  RequestHeaderProvider
 	logger          Logger
+	// setCookies is injected for testing; defaults to collector.SetCookies.
+	setCookies func(URL string, cookies []*http.Cookie) error
 }
 
 func newRequestConfigurator(cfg Config, logger Logger) RequestConfigurator {
@@ -31,10 +33,16 @@ func newRequestConfigurator(cfg Config, logger Logger) RequestConfigurator {
 
 func (configurator *requestConfigurator) Configure(collector *colly.Collector) {
 	if configurator.cookieGenerator != nil {
+		setter := configurator.setCookies
+		if setter == nil {
+			setter = collector.SetCookies
+		}
 		for _, domain := range configurator.cookieDomains {
 			cookies := configurator.cookieGenerator(domain)
 			for _, cookie := range cookies {
-				_ = collector.SetCookies("https://"+domain, []*http.Cookie{cookie})
+				if err := setter("https://"+domain, []*http.Cookie{cookie}); err != nil {
+					configurator.logger.Error("failed to set cookie for %s: %v", domain, err)
+				}
 			}
 		}
 	}

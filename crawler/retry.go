@@ -59,7 +59,10 @@ func (handler *retryHandler) Retry(response *colly.Response, options RetryOption
 	}
 
 	response.Ctx.Put(retryCountKey, nextAttempt)
-	_ = response.Request.Retry()
+	if err := response.Request.Retry(); err != nil {
+		handler.logger.Error("Failed to retry URL: %s, Error: %v", response.Request.URL.String(), err)
+		return false
+	}
 	handler.logger.Debug("Retrying URL %s; %d retries left.", response.Request.URL.String(), maxRetries-attempt-1)
 	return true
 }

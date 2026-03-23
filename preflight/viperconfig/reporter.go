@@ -37,6 +37,8 @@ type Reporter struct {
 	configPath  string
 	envBindings []EnvBinding
 	redactor    Redactor
+	// bindEnvFn is injected for testing; defaults to viperInstance.BindEnv.
+	bindEnvFn func(input ...string) error
 }
 
 // NewReporter constructs a Viper-backed config reporter.
@@ -83,8 +85,14 @@ func (reporter *Reporter) loadSettings() (map[string]interface{}, error) {
 	if filepath.Ext(reporter.configPath) == "" {
 		viperInstance.SetConfigType("yaml")
 	}
+	bindEnv := reporter.bindEnvFn
+	if bindEnv == nil {
+		bindEnv = viperInstance.BindEnv
+	}
 	for _, binding := range reporter.envBindings {
-		_ = viperInstance.BindEnv(binding.Key, binding.Env)
+		if err := bindEnv(binding.Key, binding.Env); err != nil {
+			return nil, fmt.Errorf("%w: %s: %w", ErrReporter, errorCodeConfigRead, err)
+		}
 	}
 	viperInstance.AutomaticEnv()
 	if err := viperInstance.ReadInConfig(); err != nil {
