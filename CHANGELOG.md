@@ -1,5 +1,33 @@
 # Changelog
 
+## [v0.4.0]
+
+### Features ✨
+- **Breaking**: Rewrite `crawler` package with production engine extracted from PoodleScanner.
+- Add `ResponseHandler` interface for pluggable response processing.
+- Add `DefaultResponseHandler` with generic parse-evaluate-emit flow.
+- Add `PlatformHooks` interface for title normalisation and retry decisions.
+- Add `Target` type with smart constructor and extensible `Metadata` map (replaces `Page`).
+- Add proxy rotation (round-robin) with circuit-breaker health tracking.
+- Add HTTP transport chain: idle-timeout, context-aware, panic-safe wrappers.
+- Add file persistence with async background worker pool.
+- Add request configurator with header/cookie injection.
+
+### Improvements ⚙️
+- Restructure `Config` into `ScraperConfig` and `PlatformConfig` sub-types.
+- Export retry handler, proxy rotator, transport constructors, and response helpers for custom `ResponseHandler` implementations.
+
+### Bug Fixes 🐛
+- _No changes._
+
+### Testing 🧪
+- Add `TestNewTarget` smart constructor validation test.
+- Add `TestConfigValidation` for config edge cases.
+- Add `TestSanitizeProxyURL` for proxy URL credential stripping.
+
+### Docs 📚
+- Add package-level documentation in `doc.go`.
+
 ## [v0.3.0]
 
 ### Features ✨
