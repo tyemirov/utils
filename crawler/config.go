@@ -6,36 +6,47 @@ import (
 	"time"
 )
 
-// Config wires the crawler with domain settings, scraping options, and collaborators.
+// Config wires the crawler service with target metadata, scraping options,
+// and effectful collaborators.
 type Config struct {
-	// AllowedDomains restricts crawling to these hosts.
-	AllowedDomains []string
+	// Category identifies the target category (e.g., "AMZN", "camps").
+	Category string
 
-	// Parallelism controls concurrent requests. Required, must be > 0.
-	Parallelism int
+	// Scraper controls concurrency, retries, and network behaviour.
+	Scraper ScraperConfig
 
-	// RetryCount sets additional retry attempts per page. 0 = no retries.
-	RetryCount int
+	// Platform holds domain-specific settings.
+	Platform PlatformConfig
 
-	// HTTPTimeout caps each HTTP request. 0 = no timeout.
-	HTTPTimeout time.Duration
+	// ResponseHandler processes HTTP responses. Optional; when nil, a default
+	// handler is created using the Evaluator.
+	ResponseHandler ResponseHandler
 
-	// RateLimit sets minimum delay between requests to the same domain.
-	RateLimit time.Duration
-
-	// MaxDepth limits link-following depth. 0 = no link following.
-	MaxDepth int
-
-	// Evaluator processes fetched documents. Required.
+	// Evaluator produces findings for a fetched document. Required when
+	// ResponseHandler is nil.
 	Evaluator Evaluator
 
-	// CookieDomains lists domains for which CookieProvider is called.
-	CookieDomains []string
+	// PlatformHooks customise title normalisation and retry decisions. Optional.
+	PlatformHooks PlatformHooks
 
 	// CookieProvider returns cookies per domain. Optional.
 	CookieProvider CookieProvider
 
-	// Headers customizes outbound requests. Optional.
+	// CookieDomains lists domains for which CookieProvider is called.
+	CookieDomains []string
+
+	// FilePersister handles artifact persistence. Optional; a default
+	// implementation is created when OutputDirectory is set.
+	FilePersister FilePersister
+
+	// OutputDirectory is optional; when set and FilePersister is nil the
+	// crawler will persist artifacts under this path.
+	OutputDirectory string
+
+	// RunFolder scopes persisted artifacts for a single execution.
+	RunFolder string
+
+	// Headers customises outbound requests. Optional.
 	Headers HeaderProvider
 
 	// Hook runs before each request. Optional.
@@ -45,16 +56,63 @@ type Config struct {
 	Logger Logger
 }
 
-// Validate checks required fields.
-func (c Config) Validate() error {
-	if len(c.AllowedDomains) == 0 {
-		return errors.New("crawler: allowed domains required")
+// Validate ensures required configuration is present and self-consistent.
+func (cfg Config) Validate() error {
+	if cfg.Category == "" {
+		return errors.New("crawler: category is required")
 	}
-	if c.Parallelism <= 0 {
-		return fmt.Errorf("crawler: parallelism must be > 0 (got %d)", c.Parallelism)
+	if err := cfg.Scraper.Validate(); err != nil {
+		return fmt.Errorf("crawler: invalid scraper config: %w", err)
 	}
-	if c.Evaluator == nil {
-		return errors.New("crawler: evaluator required")
+	if err := cfg.Platform.Validate(); err != nil {
+		return fmt.Errorf("crawler: invalid platform config: %w", err)
+	}
+	if cfg.ResponseHandler == nil && cfg.Evaluator == nil {
+		return errors.New("crawler: evaluator is required when no response handler is provided")
+	}
+	return nil
+}
+
+// ScraperConfig controls concurrency, retries, and network behaviour.
+type ScraperConfig struct {
+	MaxDepth                   int
+	Parallelism                int
+	RetryCount                 int
+	HTTPTimeout                time.Duration
+	InsecureSkipVerify         bool
+	RateLimit                  time.Duration
+	ProxyList                  []string
+	ProxyCircuitBreakerEnabled bool
+	SaveFiles                  bool
+}
+
+// Validate checks that essential numeric fields are positive.
+func (cfg ScraperConfig) Validate() error {
+	if cfg.Parallelism <= 0 {
+		return fmt.Errorf("parallelism must be greater than zero (got %d)", cfg.Parallelism)
+	}
+	if cfg.RetryCount < 0 {
+		return fmt.Errorf("retry count must be non-negative (got %d)", cfg.RetryCount)
+	}
+	if cfg.MaxDepth < 0 {
+		return fmt.Errorf("max depth must be non-negative (got %d)", cfg.MaxDepth)
+	}
+	if cfg.RateLimit < 0 {
+		return fmt.Errorf("rate limit must be non-negative (got %s)", cfg.RateLimit)
+	}
+	return nil
+}
+
+// PlatformConfig restricts the crawler to known domains.
+type PlatformConfig struct {
+	AllowedDomains []string
+	CookieDomains  []string
+}
+
+// Validate ensures the platform configuration is usable.
+func (cfg PlatformConfig) Validate() error {
+	if len(cfg.AllowedDomains) == 0 {
+		return errors.New("allowed domains required")
 	}
 	return nil
 }
