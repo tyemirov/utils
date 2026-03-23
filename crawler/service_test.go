@@ -15,7 +15,7 @@ type testEvaluator struct {
 	selector string
 }
 
-func (e *testEvaluator) Evaluate(pageID string, doc *goquery.Document) (Evaluation, error) {
+func (e *testEvaluator) Evaluate(targetID string, doc *goquery.Document) (Evaluation, error) {
 	var findings []Finding
 	doc.Find(e.selector).Each(func(_ int, s *goquery.Selection) {
 		findings = append(findings, Finding{
@@ -27,11 +27,32 @@ func (e *testEvaluator) Evaluate(pageID string, doc *goquery.Document) (Evaluati
 	return Evaluation{Findings: findings}, nil
 }
 
+func TestNewTarget(t *testing.T) {
+	_, err := NewTarget("", "cat", "http://example.com")
+	if err == nil {
+		t.Fatal("expected error for empty id")
+	}
+	_, err = NewTarget("id", "", "http://example.com")
+	if err == nil {
+		t.Fatal("expected error for empty category")
+	}
+	_, err = NewTarget("id", "cat", "")
+	if err == nil {
+		t.Fatal("expected error for empty url")
+	}
+	target, err := NewTarget("id", "cat", "http://example.com", WithMetadata("key", "val"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if target.MetadataValue("key") != "val" {
+		t.Errorf("expected metadata key=val, got %q", target.MetadataValue("key"))
+	}
+}
+
 func TestCrawlerBasic(t *testing.T) {
-	// Serve a test page
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
-		fmt.Fprint(w, `<html><body>
+		fmt.Fprint(w, `<html><head><title>Test</title></head><body>
 			<div class="item">Camp A</div>
 			<div class="item">Camp B</div>
 			<div class="item">Camp C</div>
@@ -41,20 +62,19 @@ func TestCrawlerBasic(t *testing.T) {
 
 	results := make(chan *Result, 10)
 
+	target, _ := NewTarget("test1", "camps", server.URL+"/page1")
 	svc, err := NewService(Config{
-		AllowedDomains: []string{"127.0.0.1"},
-		Parallelism:    2,
-		HTTPTimeout:    5 * time.Second,
-		Evaluator:      &testEvaluator{selector: ".item"},
+		Category:  "camps",
+		Scraper:   ScraperConfig{Parallelism: 2, HTTPTimeout: 5 * time.Second},
+		Platform:  PlatformConfig{AllowedDomains: []string{"127.0.0.1"}},
+		Evaluator: &testEvaluator{selector: ".item"},
 	}, results)
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
 
 	go func() {
-		svc.Run(context.Background(), []Page{
-			{ID: "test1", Category: "camps", URL: server.URL + "/page1"},
-		})
+		svc.Run(context.Background(), []Target{target})
 		close(results)
 	}()
 
@@ -70,8 +90,11 @@ func TestCrawlerBasic(t *testing.T) {
 	if !r.Success {
 		t.Fatalf("expected success, got error: %s", r.ErrorMessage)
 	}
-	if r.PageID != "test1" {
-		t.Errorf("expected pageID test1, got %s", r.PageID)
+	if r.TargetID != "test1" {
+		t.Errorf("expected targetID test1, got %s", r.TargetID)
+	}
+	if r.Title != "Test" {
+		t.Errorf("expected title 'Test', got %q", r.Title)
 	}
 	if len(r.Findings) != 3 {
 		t.Fatalf("expected 3 findings, got %d", len(r.Findings))
@@ -97,20 +120,18 @@ func TestCrawlerRetry(t *testing.T) {
 	results := make(chan *Result, 10)
 
 	svc, err := NewService(Config{
-		AllowedDomains: []string{"127.0.0.1"},
-		Parallelism:    1,
-		RetryCount:     3,
-		HTTPTimeout:    5 * time.Second,
-		Evaluator:      &testEvaluator{selector: ".ok"},
+		Category:  "test",
+		Scraper:   ScraperConfig{Parallelism: 1, RetryCount: 3, HTTPTimeout: 5 * time.Second},
+		Platform:  PlatformConfig{AllowedDomains: []string{"127.0.0.1"}},
+		Evaluator: &testEvaluator{selector: ".ok"},
 	}, results)
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
 
+	target, _ := NewTarget("retry-test", "test", server.URL+"/flaky")
 	go func() {
-		svc.Run(context.Background(), []Page{
-			{ID: "retry-test", URL: server.URL + "/flaky"},
-		})
+		svc.Run(context.Background(), []Target{target})
 		close(results)
 	}()
 
@@ -124,5 +145,42 @@ func TestCrawlerRetry(t *testing.T) {
 	}
 	if !got[0].Success {
 		t.Errorf("expected success after retries, got error: %s", got[0].ErrorMessage)
+	}
+}
+
+func TestConfigValidation(t *testing.T) {
+	cfg := Config{Category: "", Scraper: ScraperConfig{Parallelism: 1}, Platform: PlatformConfig{AllowedDomains: []string{"x"}}, Evaluator: &testEvaluator{}}
+	if err := cfg.Validate(); err == nil {
+		t.Error("expected error for empty category")
+	}
+	cfg.Category = "test"
+	cfg.Scraper.Parallelism = 0
+	if err := cfg.Validate(); err == nil {
+		t.Error("expected error for zero parallelism")
+	}
+	cfg.Scraper.Parallelism = 1
+	cfg.Platform.AllowedDomains = nil
+	if err := cfg.Validate(); err == nil {
+		t.Error("expected error for empty domains")
+	}
+	cfg.Platform.AllowedDomains = []string{"x"}
+	cfg.Evaluator = nil
+	if err := cfg.Validate(); err == nil {
+		t.Error("expected error for nil evaluator without response handler")
+	}
+}
+
+func TestSanitizeProxyURL(t *testing.T) {
+	tests := []struct{ input, expected string }{
+		{"", ""},
+		{"http://host:8080", "http://host:8080"},
+		{"http://user:pass@host:8080", "http://host:8080"},
+		{"http://user:pass@host:8080/path", "http://host:8080/path"},
+	}
+	for _, tc := range tests {
+		got := SanitizeProxyURL(tc.input)
+		if got != tc.expected {
+			t.Errorf("SanitizeProxyURL(%q) = %q, want %q", tc.input, got, tc.expected)
+		}
 	}
 }

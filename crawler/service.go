@@ -1,7 +1,6 @@
 package crawler
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"net/http"
@@ -9,364 +8,262 @@ import (
 	"sync"
 	"time"
 
-	"github.com/PuerkitoBio/goquery"
 	"github.com/gocolly/colly/v2"
 )
 
-const defaultRequestTimeout = 30 * time.Second
+const defaultCollyRequestTimeout = 10 * time.Second
 
-// context keys for Colly request context
-const (
-	ctxPageIDKey       = "crawler_page_id"
-	ctxPageCategoryKey = "crawler_page_category"
-	ctxPageURLKey      = "crawler_page_url"
-	ctxFinalURLKey     = "crawler_final_url"
-	ctxTitleKey        = "crawler_title"
-	ctxHTTPStatusKey   = "crawler_http_status"
-	ctxEvalKey         = "crawler_evaluation"
-	ctxRetryCountKey   = "crawler_retry_count"
-	ctxRetriedKey      = "crawler_retried"
-)
-
-// Service orchestrates crawling pages and emits results.
+// Service orchestrates crawling of targets and emits results.
 type Service struct {
-	cfg       Config
-	collector *colly.Collector
-	results   chan<- *Result
-	logger    Logger
-	slots     chan struct{}
-	mu        sync.RWMutex
-	runCtx    context.Context
+	cfg             Config
+	collector       *colly.Collector
+	responseHandler ResponseHandler
+	retryHandler    RetryHandler
+	filePersister   FilePersister
+	logger          Logger
+	hook            RequestHook
+	ctxMu           sync.RWMutex
+	runCtx          context.Context
+	slots           chan struct{}
 }
 
 // NewService constructs a crawler service.
+// When cfg.ResponseHandler is nil, a DefaultResponseHandler is created using
+// cfg.Evaluator and the results channel.
+// When cfg.ResponseHandler is set, results can be nil.
 func NewService(cfg Config, results chan<- *Result) (*Service, error) {
-	if results == nil {
-		return nil, fmt.Errorf("crawler: results channel is required")
+	if cfg.ResponseHandler == nil && results == nil {
+		return nil, fmt.Errorf("crawler: results channel is required when no response handler is provided")
 	}
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
 
-	logger := cfg.Logger
-	if logger == nil {
-		logger = noopLog{}
+	logger := ensureLogger(cfg.Logger)
+
+	filePersister := cfg.FilePersister
+	if filePersister == nil && cfg.OutputDirectory != "" {
+		filePersister = NewDirectoryFilePersister(cfg.OutputDirectory, cfg.Category, cfg.RunFolder)
+	}
+	if filePersister != nil {
+		workerCount := cfg.Scraper.Parallelism / 4
+		if workerCount < 2 {
+			workerCount = 2
+		}
+		if workerCount > 8 {
+			workerCount = 8
+		}
+		bufferSize := cfg.Scraper.Parallelism * 2
+		if bufferSize < 16 {
+			bufferSize = 16
+		}
+		filePersister = NewBackgroundFilePersister(filePersister, workerCount, bufferSize, logger)
 	}
 
-	collector, err := newCollector(cfg, logger)
+	retryHandler := NewRetryHandler(cfg.Scraper, logger)
+	requestConfigurator := NewRequestConfigurator(cfg, logger)
+	hook := ensureRequestHook(cfg.Hook)
+
+	collector, proxyTracker, transport, err := newCollector(cfg, logger)
 	if err != nil {
 		return nil, err
 	}
 
-	svc := &Service{
-		cfg:       cfg,
-		collector: collector,
-		results:   results,
-		logger:    logger,
-		slots:     make(chan struct{}, cfg.Parallelism),
+	var responseHandler ResponseHandler
+	if cfg.ResponseHandler != nil {
+		responseHandler = cfg.ResponseHandler
+	} else {
+		responseHandler = NewDefaultResponseHandler(cfg, retryHandler, proxyTracker, filePersister, results, logger)
 	}
 
-	// Wire up request configuration
-	svc.setupRequests(collector)
-	// Wire up response processing
-	svc.setupResponses(collector)
-	// Wire up error handling with retries
-	svc.setupErrors(collector)
+	requestConfigurator.Configure(collector)
+	responseHandler.Setup(collector)
+	SetupErrorHandling(collector, responseHandler, retryHandler, proxyTracker, logger)
+
+	svc := &Service{
+		cfg:             cfg,
+		collector:       collector,
+		responseHandler: responseHandler,
+		retryHandler:    retryHandler,
+		filePersister:   filePersister,
+		logger:          logger,
+		hook:            hook,
+		slots:           make(chan struct{}, cfg.Scraper.Parallelism),
+	}
+
+	responseHandler.SetSlotReleaser(svc.releaseSlot)
+
+	contextTransport := NewContextAwareTransport(transport, svc.currentRunContext)
+	panicSafeTransport := NewPanicSafeTransport(contextTransport, logger)
+	collector.WithTransport(panicSafeTransport)
 
 	return svc, nil
 }
 
-// Run visits each page and blocks until all are processed or ctx is cancelled.
-func (svc *Service) Run(ctx context.Context, pages []Page) error {
-	if len(pages) == 0 {
-		return fmt.Errorf("crawler: no pages provided")
+// Run visits each target and blocks until all are processed or ctx is cancelled.
+func (svc *Service) Run(ctx context.Context, targets []Target) error {
+	if len(targets) == 0 {
+		return fmt.Errorf("crawler: no targets provided")
 	}
 
-	svc.mu.Lock()
-	svc.runCtx = ctx
-	svc.mu.Unlock()
-	defer func() {
-		svc.mu.Lock()
-		svc.runCtx = nil
-		svc.mu.Unlock()
-	}()
+	cleanup := svc.assignRunContext(ctx)
+	defer cleanup()
 
-	for _, page := range pages {
+	runCtx := ctx
+	if runCtx == nil {
+		runCtx = context.Background()
+	}
+
+	for _, target := range targets {
 		select {
-		case <-ctx.Done():
-			svc.logger.Info("Crawler received shutdown signal")
-			goto Wait
+		case <-runCtx.Done():
+			svc.logger.Info("Crawler received shutdown signal. Stopping loop...")
+			goto Cleanup
 		default:
 		}
-		if err := svc.visit(ctx, page); err != nil {
-			svc.logger.Warning("Failed to visit %s: %v", page.ID, err)
-			if ctx.Err() != nil {
-				goto Wait
+		if err := svc.processTarget(runCtx, target); err != nil {
+			svc.logger.Warning("Failed to process target %s: %v", target.ID, err)
+			if runCtx.Err() != nil {
+				goto Cleanup
 			}
 		}
 	}
 
-Wait:
+Cleanup:
 	svc.collector.Wait()
-	return ctx.Err()
+	if svc.filePersister != nil {
+		if err := svc.filePersister.Close(); err != nil {
+			svc.logger.Error("Failed to close file persister: %v", err)
+		}
+	}
+	return runCtx.Err()
 }
 
-func (svc *Service) visit(ctx context.Context, page Page) error {
-	// Acquire slot (bounded parallelism)
-	select {
-	case svc.slots <- struct{}{}:
-	case <-ctx.Done():
-		return ctx.Err()
-	}
+// RetryHandler returns the service's retry handler for use by custom ResponseHandlers.
+func (svc *Service) RetryHandler() RetryHandler {
+	return svc.retryHandler
+}
 
-	// Run hook if configured
-	if svc.cfg.Hook != nil {
-		if err := svc.cfg.Hook.BeforeRequest(ctx, page); err != nil {
-			<-svc.slots
-			svc.results <- &Result{
-				PageID:       page.ID,
-				PageURL:      page.URL,
-				Category:     page.Category,
-				Success:      false,
-				ErrorMessage: err.Error(),
-			}
-			return nil
-		}
+func (svc *Service) processTarget(ctx context.Context, target Target) error {
+	if err := svc.reserveSlot(ctx, target.ID); err != nil {
+		return err
 	}
 
 	reqCtx := colly.NewContext()
-	reqCtx.Put(ctxPageIDKey, page.ID)
-	reqCtx.Put(ctxPageCategoryKey, page.Category)
-	reqCtx.Put(ctxPageURLKey, page.URL)
+	reqCtx.Put(CtxTargetIDKey, target.ID)
+	reqCtx.Put(CtxTargetCategoryKey, target.Category)
+	reqCtx.Put(CtxTargetURLKey, target.URL)
+	reqCtx.Put(CtxRunContextKey, ctx)
 
-	svc.logger.Debug("Visiting %s (%s)", page.URL, page.ID)
-	if err := svc.collector.Request(http.MethodGet, page.URL, nil, reqCtx, nil); err != nil {
-		<-svc.slots
-		svc.logger.Error("Request failed for %s: %v", page.URL, err)
+	if hookErr := svc.hook.BeforeRequest(ctx, target); hookErr != nil {
+		reqCtx.Put(CtxErrorKey, hookErr)
+		svc.responseHandler.SendResult(&colly.Response{Ctx: reqCtx}, false, hookErr.Error())
+		return nil
+	}
+
+	svc.logger.Debug("Visiting URL for target: %s (%s)", target.ID, target.URL)
+	if err := svc.collector.Request(http.MethodGet, target.URL, nil, reqCtx, nil); err != nil {
+		svc.logger.Error("Failed to visit URL: %s, Error: %v", target.URL, err)
+		svc.releaseSlotByID(target.ID)
 	}
 	return nil
 }
 
-func (svc *Service) releaseSlot() {
+func (svc *Service) reserveSlot(ctx context.Context, targetID string) error {
+	select {
+	case svc.slots <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (svc *Service) releaseSlot(resp *colly.Response) {
 	select {
 	case <-svc.slots:
 	default:
 	}
 }
 
+func (svc *Service) releaseSlotByID(targetID string) {
+	svc.releaseSlot(nil)
+}
+
+func (svc *Service) assignRunContext(ctx context.Context) func() {
+	svc.ctxMu.Lock()
+	svc.runCtx = ctx
+	svc.ctxMu.Unlock()
+	return func() {
+		svc.ctxMu.Lock()
+		svc.runCtx = nil
+		svc.ctxMu.Unlock()
+	}
+}
+
+func (svc *Service) currentRunContext() context.Context {
+	svc.ctxMu.RLock()
+	defer svc.ctxMu.RUnlock()
+	return svc.runCtx
+}
+
 // --- Collector setup ---
 
-func newCollector(cfg Config, logger Logger) (*colly.Collector, error) {
+func newCollector(cfg Config, logger Logger) (*colly.Collector, ProxyHealth, *http.Transport, error) {
 	c := colly.NewCollector(
 		colly.AllowURLRevisit(),
-		colly.AllowedDomains(cfg.AllowedDomains...),
+		colly.AllowedDomains(cfg.Platform.AllowedDomains...),
 		colly.Async(),
-		colly.MaxDepth(cfg.MaxDepth),
+		colly.MaxDepth(cfg.Scraper.MaxDepth),
 		colly.IgnoreRobotsTxt(),
 	)
 
-	timeout := cfg.HTTPTimeout
-	if timeout <= 0 {
-		timeout = defaultRequestTimeout
+	transport := NewHTTPTransport(cfg.Scraper.InsecureSkipVerify, cfg.Scraper.HTTPTimeout)
+	c.WithTransport(transport)
+	if shouldOverrideTimeout(cfg.Scraper.HTTPTimeout) {
+		c.SetRequestTimeout(cfg.Scraper.HTTPTimeout)
 	}
-	c.SetRequestTimeout(timeout)
 
 	rule := &colly.LimitRule{
 		DomainGlob:  "*",
-		Parallelism: cfg.Parallelism,
+		Parallelism: cfg.Scraper.Parallelism,
 	}
-	if cfg.RateLimit > 0 {
-		rule.Delay = cfg.RateLimit
-		rule.RandomDelay = cfg.RateLimit / 2
+	if cfg.Scraper.RateLimit > 0 {
+		rule.Delay = cfg.Scraper.RateLimit
+		rule.RandomDelay = cfg.Scraper.RateLimit / 2
 	}
 	if err := c.Limit(rule); err != nil {
-		return nil, err
+		return nil, nil, nil, err
+	}
+
+	var tracker ProxyHealth
+	switch len(cfg.Scraper.ProxyList) {
+	case 0:
+	case 1:
+		proxyFn, err := NewProxyRotator(cfg.Scraper.ProxyList, nil, logger)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		c.SetProxyFunc(proxyFn)
+	default:
+		if cfg.Scraper.ProxyCircuitBreakerEnabled {
+			tracker = NewProxyHealthTracker(cfg.Scraper.ProxyList, logger)
+		}
+		proxyFn, err := NewProxyRotator(cfg.Scraper.ProxyList, tracker, logger)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		c.SetProxyFunc(proxyFn)
 	}
 
 	jar, err := cookiejar.New(nil)
 	if err != nil {
-		return nil, fmt.Errorf("crawler: cookie jar: %w", err)
+		return nil, nil, nil, fmt.Errorf("crawler: failed to create cookie jar: %w", err)
 	}
 	c.SetCookieJar(jar)
 
-	return c, nil
+	return c, tracker, transport, nil
 }
 
-func (svc *Service) setupRequests(c *colly.Collector) {
-	// Set cookies if configured
-	if svc.cfg.CookieProvider != nil {
-		for _, domain := range svc.cfg.CookieDomains {
-			cookies := svc.cfg.CookieProvider(domain)
-			for _, cookie := range cookies {
-				c.SetCookies("https://"+domain, []*http.Cookie{cookie})
-			}
-		}
-	}
-
-	c.OnRequest(func(r *colly.Request) {
-		// Apply custom headers
-		if svc.cfg.Headers != nil {
-			svc.cfg.Headers.Apply(r)
-		}
-		// Default user agent
-		if r.Headers.Get("User-Agent") == "" {
-			r.Headers.Set("User-Agent", "Mozilla/5.0 (compatible; Crawler/1.0)")
-		}
-	})
+func shouldOverrideTimeout(timeout time.Duration) bool {
+	return timeout <= 0 || timeout > defaultCollyRequestTimeout
 }
-
-func (svc *Service) setupResponses(c *colly.Collector) {
-	c.OnResponse(func(resp *colly.Response) {
-		pageID := resp.Ctx.Get(ctxPageIDKey)
-		category := resp.Ctx.Get(ctxPageCategoryKey)
-		pageURL := resp.Ctx.Get(ctxPageURLKey)
-		finalURL := ""
-		if resp.Request != nil && resp.Request.URL != nil {
-			finalURL = resp.Request.URL.String()
-		}
-
-		// Parse HTML
-		doc, err := goquery.NewDocumentFromReader(bytes.NewReader(resp.Body))
-		if err != nil {
-			svc.sendResult(resp, &Result{
-				PageID:         pageID,
-				PageURL:        pageURL,
-				FinalURL:       finalURL,
-				Category:       category,
-				Success:        false,
-				ErrorMessage:   fmt.Sprintf("parse error: %v", err),
-				HTTPStatusCode: resp.StatusCode,
-			})
-			return
-		}
-
-		// Extract title
-		title := doc.Find("title").First().Text()
-
-		// Run evaluator
-		eval, evalErr := svc.cfg.Evaluator.Evaluate(pageID, doc)
-		if evalErr != nil {
-			svc.sendResult(resp, &Result{
-				PageID:         pageID,
-				PageURL:        pageURL,
-				FinalURL:       finalURL,
-				Category:       category,
-				Title:          title,
-				Success:        false,
-				ErrorMessage:   fmt.Sprintf("evaluator error: %v", evalErr),
-				HTTPStatusCode: resp.StatusCode,
-				Document:       doc,
-			})
-			return
-		}
-
-		svc.sendResult(resp, &Result{
-			PageID:         pageID,
-			PageURL:        pageURL,
-			FinalURL:       finalURL,
-			Category:       category,
-			Title:          title,
-			Success:        true,
-			HTTPStatusCode: resp.StatusCode,
-			Findings:       eval.Findings,
-			Document:       doc,
-		})
-	})
-}
-
-func (svc *Service) setupErrors(c *colly.Collector) {
-	c.OnError(func(resp *colly.Response, err error) {
-		if resp == nil || resp.Ctx == nil {
-			svc.logger.Error("Nil response in error handler: %v", err)
-			return
-		}
-
-		pageID := resp.Ctx.Get(ctxPageIDKey)
-		category := resp.Ctx.Get(ctxPageCategoryKey)
-		pageURL := resp.Ctx.Get(ctxPageURLKey)
-		errText := ""
-		if err != nil {
-			errText = err.Error()
-		}
-
-		url := "<unknown>"
-		if resp.Request != nil && resp.Request.URL != nil {
-			url = resp.Request.URL.String()
-		}
-		svc.logger.Error("Error fetching %s (status %d): %v", url, resp.StatusCode, err)
-
-		// Don't retry 404s
-		if resp.StatusCode == http.StatusNotFound {
-			svc.sendResult(resp, &Result{
-				PageID:         pageID,
-				PageURL:        pageURL,
-				Category:       category,
-				Success:        false,
-				ErrorMessage:   errText,
-				HTTPStatusCode: resp.StatusCode,
-			})
-			return
-		}
-
-		// Retry with exponential backoff
-		if svc.retry(resp) {
-			return
-		}
-
-		svc.sendResult(resp, &Result{
-			PageID:         pageID,
-			PageURL:        pageURL,
-			Category:       category,
-			Success:        false,
-			ErrorMessage:   errText,
-			HTTPStatusCode: resp.StatusCode,
-		})
-	})
-}
-
-func (svc *Service) sendResult(resp *colly.Response, result *Result) {
-	svc.releaseSlot()
-	svc.results <- result
-}
-
-// --- Retry logic (exponential backoff) ---
-
-func (svc *Service) retry(resp *colly.Response) bool {
-	if svc.cfg.RetryCount == 0 || resp.Request == nil {
-		return false
-	}
-	if retried, ok := resp.Ctx.GetAny(ctxRetriedKey).(bool); ok && retried {
-		return false
-	}
-
-	attempt := 0
-	if v, ok := resp.Ctx.GetAny(ctxRetryCountKey).(int); ok {
-		attempt = v
-	}
-	if attempt >= svc.cfg.RetryCount {
-		resp.Ctx.Put(ctxRetriedKey, true)
-		svc.logger.Error("No retries left for %s", resp.Request.URL)
-		return false
-	}
-
-	next := attempt + 1
-	backoff := time.Second * (1 << uint(next)) // 2s, 4s, 8s, ...
-	svc.logger.Debug("Retrying %s (attempt %d/%d, backoff %s)", resp.Request.URL, next, svc.cfg.RetryCount, backoff)
-	time.Sleep(backoff)
-
-	resp.Ctx.Put(ctxRetryCountKey, next)
-	if err := resp.Request.Retry(); err != nil {
-		svc.logger.Error("Retry failed for %s: %v", resp.Request.URL, err)
-		return false
-	}
-	return true
-}
-
-// --- Logger ---
-
-type noopLog struct{}
-
-func (noopLog) Debug(string, ...interface{})   {}
-func (noopLog) Info(string, ...interface{})    {}
-func (noopLog) Warning(string, ...interface{}) {}
-func (noopLog) Error(string, ...interface{})   {}
