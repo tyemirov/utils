@@ -47,9 +47,6 @@ func SanitizeToCamelCase(input string) string {
 	// Single-word scenario
 	if len(cleanedWords) == 1 {
 		word := cleanedWords[0]
-		if len(word) == 0 {
-			return ""
-		}
 		// Ensure first letter is lowercase
 		word = strings.ToLower(word[:1]) + word[1:]
 
@@ -81,9 +78,6 @@ func SanitizeToCamelCase(input string) string {
 	uppercaseUsed := false
 	for i := 1; i < len(cleanedWords); i++ {
 		word := cleanedWords[i]
-		if word == "" {
-			continue
-		}
 		if !uppercaseUsed {
 			// For the first subsequent word, uppercase its first letter
 			// and lowercase the rest

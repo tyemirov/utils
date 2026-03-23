@@ -34,9 +34,7 @@ func (configurator *requestConfigurator) Configure(collector *colly.Collector) {
 		for _, domain := range configurator.cookieDomains {
 			cookies := configurator.cookieGenerator(domain)
 			for _, cookie := range cookies {
-				if err := collector.SetCookies("https://"+domain, []*http.Cookie{cookie}); err != nil {
-					configurator.logger.Error("failed to set cookie for %s: %v", domain, err)
-				}
+				_ = collector.SetCookies("https://"+domain, []*http.Cookie{cookie})
 			}
 		}
 	}

@@ -54,9 +54,6 @@ type proxyRotator struct {
 func (rotator *proxyRotator) nextProxy(request *http.Request) (*url.URL, error) {
 	rotator.mu.Lock()
 	defer rotator.mu.Unlock()
-	if len(rotator.proxies) == 0 {
-		return nil, fmt.Errorf("crawler: proxy list is empty")
-	}
 	for attempts := 0; attempts < len(rotator.proxies); attempts++ {
 		rotator.position = (rotator.position + 1) % len(rotator.proxies)
 		candidate := rotator.proxies[rotator.position]

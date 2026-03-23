@@ -9,12 +9,16 @@ import (
 	"strings"
 )
 
+// logFatalf is the function used by GetEnvOrFail to terminate on missing variables.
+// Tests may override it to avoid process exit.
+var logFatalf = log.Fatalf
+
 // GetEnvOrFail retrieves the value of the environment variable with the given
 // name. If the variable is not set, the process exits via log.Fatalf.
 func GetEnvOrFail(name string) string {
 	value := os.Getenv(name)
 	if value == "" {
-		log.Fatalf("%s environment variable not set", name)
+		logFatalf("%s environment variable not set", name)
 	}
 	return value
 }

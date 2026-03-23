@@ -194,9 +194,6 @@ func (worker *Worker) executeJob(ctx context.Context, job Job, now time.Time) {
 			status = worker.successStatus
 		}
 	}
-	if status == "" {
-		status = worker.failureStatus
-	}
 
 	update := AttemptUpdate{
 		Status:            status,

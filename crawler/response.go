@@ -79,14 +79,7 @@ func (processor *responseProcessor) handleResponse(resp *colly.Response) {
 		}
 	}
 
-	document, parseErr := goquery.NewDocumentFromReader(bytes.NewReader(resp.Body))
-	if parseErr != nil {
-		processor.logger.Error("Failed to parse HTML response for %s product: %s, error: %v", processor.platformID, productID, parseErr)
-		if !processor.retryHandler.Retry(resp, RetryOptions{}) {
-			processor.SendFinalResult(resp, false, parseErr.Error())
-		}
-		return
-	}
+	document, _ := goquery.NewDocumentFromReader(bytes.NewReader(resp.Body))
 
 	pageTitleText := extractDocumentTitle(document)
 	domTitleText := processor.platformHooks.ExtractDOMTitle(document)
@@ -185,7 +178,7 @@ func (processor *responseProcessor) handleResponse(resp *colly.Response) {
 	originalURL := resp.Ctx.Get(ctxInitialURLKey)
 	processor.inferRedirect(productID, originalURL, finalURL, canonicalURL, resp.Ctx)
 
-	if processor.skipEvaluationOnRedirect(resp) {
+	if processor.skipEvaluationOnRedirect(resp, document) {
 		return
 	}
 
@@ -197,15 +190,8 @@ func (processor *responseProcessor) handleResponse(resp *colly.Response) {
 
 	resp.Ctx.Put(ctxProductRulesKey, evaluation)
 	result := processor.buildResult(resp, true, "")
-
-	for _, handler := range processor.responseHandlers {
-		handler.AfterEvaluation(resp, document, result)
-	}
-
-	if processor.resultCallback != nil {
-		processor.resultCallback(resp)
-	}
-	processor.results <- result
+	processor.runAfterEvaluationHandlers(resp, document, result)
+	processor.emitResult(resp, result)
 
 	if processor.scraperConfig.SaveFiles {
 		processor.logger.Debug("Saving HTML for %s product %s", processor.platformID, productID)
@@ -286,14 +272,24 @@ func (processor *responseProcessor) inferRedirect(productID, originalURL, finalU
 }
 
 func (processor *responseProcessor) SendFinalResult(resp *colly.Response, success bool, errorText string) {
+	result := processor.buildResult(resp, success, errorText)
+	processor.emitResult(resp, result)
+}
+
+func (processor *responseProcessor) runAfterEvaluationHandlers(resp *colly.Response, document *goquery.Document, result *Result) {
+	for _, handler := range processor.responseHandlers {
+		handler.AfterEvaluation(resp, document, result)
+	}
+}
+
+func (processor *responseProcessor) emitResult(resp *colly.Response, result *Result) {
 	if processor.resultCallback != nil {
 		processor.resultCallback(resp)
 	}
-	result := processor.buildResult(resp, success, errorText)
 	processor.results <- result
 }
 
-func (processor *responseProcessor) skipEvaluationOnRedirect(resp *colly.Response) bool {
+func (processor *responseProcessor) skipEvaluationOnRedirect(resp *colly.Response, document *goquery.Document) bool {
 	if processor == nil || resp == nil || resp.Ctx == nil {
 		return false
 	}
@@ -315,7 +311,9 @@ func (processor *responseProcessor) skipEvaluationOnRedirect(resp *colly.Respons
 		RuleResults:        nil,
 	})
 	ctx.Put(ctxProductErrorKey, message)
-	processor.SendFinalResult(resp, false, message)
+	result := processor.buildResult(resp, false, message)
+	processor.runAfterEvaluationHandlers(resp, document, result)
+	processor.emitResult(resp, result)
 	return true
 }
 
@@ -462,20 +460,4 @@ func normalizeTitleWhitespace(rawText string) string {
 		return ""
 	}
 	return strings.Join(fields, " ")
-}
-
-func looksLikeImagePayload(contentType string, body []byte) bool {
-	normalized := strings.ToLower(strings.TrimSpace(contentType))
-	if strings.HasPrefix(normalized, "image/") {
-		return true
-	}
-	if len(body) == 0 {
-		return false
-	}
-	sample := body
-	if len(sample) > 512 {
-		sample = body[:512]
-	}
-	detected := http.DetectContentType(sample)
-	return strings.HasPrefix(strings.ToLower(detected), "image/")
 }

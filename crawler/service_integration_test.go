@@ -78,6 +78,23 @@ func (processor *stubResponseProcessor) SetResultCallback(func(*colly.Response))
 
 func (processor *stubResponseProcessor) SetResponseHandlers([]ResponseHandler) {}
 
+type bindingResponseHandler struct {
+	NoopResponseHandler
+	collector     *colly.Collector
+	filePersister FilePersister
+	retryHandler  RetryHandler
+}
+
+func (handler *bindingResponseHandler) BindRuntime(
+	collector *colly.Collector,
+	filePersister FilePersister,
+	retryHandler RetryHandler,
+) {
+	handler.collector = collector
+	handler.filePersister = filePersister
+	handler.retryHandler = retryHandler
+}
+
 func TestNewCollectorEnablesTLSVerificationByDefault(t *testing.T) {
 	t.Parallel()
 
@@ -200,6 +217,37 @@ func TestNewCollectorSingleProxyAnnotatesRequestContext(t *testing.T) {
 	require.NotNil(t, proxyURL)
 	require.Equal(t, "proxy-one.test:8080", proxyURL.Host)
 	require.Equal(t, "http://user:pass@proxy-one.test:8080", req.Context().Value(colly.ProxyURLKey))
+}
+
+func TestNewServiceBindsRuntimeToResponseHandlers(t *testing.T) {
+	t.Parallel()
+
+	responseHandler := &bindingResponseHandler{}
+	cfg := Config{
+		PlatformID: "AMZN",
+		Scraper: ScraperConfig{
+			MaxDepth:    1,
+			Parallelism: 2,
+			RetryCount:  1,
+		},
+		Platform: PlatformConfig{
+			AllowedDomains: []string{"example.com"},
+		},
+		RuleEvaluator: fixedRuleEvaluator{},
+		FilePersister: &stubFilePersister{},
+		Logger:        noopLogger{},
+	}
+
+	results := make(chan *Result, 1)
+	service, err := NewService(cfg, results, WithResponseHandlers(responseHandler))
+	require.NoError(t, err)
+
+	require.NotNil(t, responseHandler.collector)
+	require.NotNil(t, responseHandler.filePersister)
+	require.NotNil(t, responseHandler.retryHandler)
+	require.Same(t, service.collector, responseHandler.collector)
+	require.Same(t, service.filePersister, responseHandler.filePersister)
+	require.Same(t, service.retryHandler, responseHandler.retryHandler)
 }
 
 func TestErrorHandlingDoesNotCountHTTPStatusAsProxyFailure(t *testing.T) {

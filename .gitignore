@@ -8,3 +8,5 @@ qodana.yaml
 tools/
 PLAN.md
 cover.out
+.coverage/
+.claude/

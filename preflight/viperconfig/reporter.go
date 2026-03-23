@@ -84,9 +84,7 @@ func (reporter *Reporter) loadSettings() (map[string]interface{}, error) {
 		viperInstance.SetConfigType("yaml")
 	}
 	for _, binding := range reporter.envBindings {
-		if err := viperInstance.BindEnv(binding.Key, binding.Env); err != nil {
-			return nil, fmt.Errorf("%w: %s: %w", ErrReporter, errorCodeConfigRead, err)
-		}
+		_ = viperInstance.BindEnv(binding.Key, binding.Env)
 	}
 	viperInstance.AutomaticEnv()
 	if err := viperInstance.ReadInConfig(); err != nil {

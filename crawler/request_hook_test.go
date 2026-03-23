@@ -37,13 +37,13 @@ func TestRequestHookFailureSkipsRequest(testContext *testing.T) {
 	cfg := Config{
 		PlatformID: "AMZN",
 		Scraper: ScraperConfig{
-			MaxDepth:                   1,
-			Parallelism:                1,
-			RetryCount:                 0,
-			HTTPTimeout:                0,
-			RateLimit:                  0,
-			ProxyList:                  nil,
-			SaveFiles:                  false,
+			MaxDepth:    1,
+			Parallelism: 1,
+			RetryCount:  0,
+			HTTPTimeout: 0,
+			RateLimit:   0,
+			ProxyList:   nil,
+			SaveFiles:   false,
 
 			ProxyCircuitBreakerEnabled: false,
 		},

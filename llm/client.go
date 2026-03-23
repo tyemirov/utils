@@ -161,10 +161,7 @@ func (client *Client) Chat(ctx context.Context, request ChatRequest) (string, er
 		return "", fmt.Errorf("encode llm request: %w", responseFormatError)
 	}
 	payload := client.buildRequestPayload(request)
-	requestBytes, marshalError := json.Marshal(payload)
-	if marshalError != nil {
-		return "", fmt.Errorf("encode llm request: %w", marshalError)
-	}
+	requestBytes, _ := json.Marshal(payload)
 	requestContext := ctx
 	if requestContext == nil {
 		requestContext = context.Background()

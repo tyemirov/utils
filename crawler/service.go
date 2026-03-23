@@ -95,6 +95,7 @@ func NewService(cfg Config, results chan<- *Result, options ...ServiceOption) (*
 		option(service)
 	}
 
+	bindResponseHandlersRuntime(service.responseHandlers, collector, filePersister, retryHandler)
 	responseProcessor.SetResultCallback(service.releaseProductSlot)
 	responseProcessor.SetResponseHandlers(service.responseHandlers)
 
@@ -107,6 +108,21 @@ func NewService(cfg Config, results chan<- *Result, options ...ServiceOption) (*
 	return service, nil
 }
 
+func bindResponseHandlersRuntime(
+	responseHandlers []ResponseHandler,
+	collector *colly.Collector,
+	filePersister FilePersister,
+	retryHandler RetryHandler,
+) {
+	for _, responseHandler := range responseHandlers {
+		runtimeBinder, ok := responseHandler.(ResponseHandlerRuntimeBinder)
+		if !ok {
+			continue
+		}
+		runtimeBinder.BindRuntime(collector, filePersister, retryHandler)
+	}
+}
+
 // Run visits each product URL once and blocks until completion or context cancellation.
 func (service *Service) Run(ctx context.Context, products []Product) error {
 	if len(products) == 0 {
@@ -116,23 +132,18 @@ func (service *Service) Run(ctx context.Context, products []Product) error {
 	cleanup := service.assignRunContext(ctx)
 	defer cleanup()
 
-	runCtx := ctx
-	if runCtx == nil {
-		runCtx = context.Background()
-	}
-
-	service.serviceHook.BeforeRun(runCtx)
+	service.serviceHook.BeforeRun(ctx)
 
 	for _, product := range products {
 		select {
-		case <-runCtx.Done():
+		case <-ctx.Done():
 			service.logger.Info("Crawler received shutdown signal. Stopping loop...")
 			goto Cleanup
 		default:
 		}
-		if err := service.processProduct(runCtx, product); err != nil {
+		if err := service.processProduct(ctx, product); err != nil {
 			service.logger.Warning("Failed to process product %s: %v", product.ID, err)
-			if runCtx.Err() != nil {
+			if ctx.Err() != nil {
 				goto Cleanup
 			}
 		}
@@ -148,7 +159,7 @@ Cleanup:
 			service.logger.Error("Failed to close file persister: %v", err)
 		}
 	}
-	return runCtx.Err()
+	return ctx.Err()
 }
 
 func (service *Service) processProduct(ctx context.Context, product Product) error {
@@ -203,9 +214,7 @@ func newCollector(cfg Config, logger Logger) (*colly.Collector, proxyHealth, htt
 		limitRule.RandomDelay = cfg.Scraper.RateLimit / 2
 	}
 
-	if err := webCollector.Limit(limitRule); err != nil {
-		return nil, nil, nil, err
-	}
+	_ = webCollector.Limit(limitRule)
 
 	var tracker proxyHealth
 	proxyHealthEnabled := cfg.Scraper.ProxyCircuitBreakerEnabled
@@ -228,10 +237,7 @@ func newCollector(cfg Config, logger Logger) (*colly.Collector, proxyHealth, htt
 		webCollector.SetProxyFunc(proxyFn)
 	}
 
-	cookieJar, err := cookiejar.New(nil)
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("crawler: failed to create cookie jar: %w", err)
-	}
+	cookieJar, _ := cookiejar.New(nil)
 	webCollector.SetCookieJar(cookieJar)
 	return webCollector, tracker, transport, nil
 }
@@ -346,13 +352,8 @@ func (service *Service) releaseProductSlotByID(productID string) {
 }
 
 func (service *Service) assignRunContext(ctx context.Context) func() {
-	runCtx := ctx
-	if runCtx == nil {
-		runCtx = context.Background()
-	}
-
 	service.ctxMu.Lock()
-	service.runCtx = runCtx
+	service.runCtx = ctx
 	service.ctxMu.Unlock()
 
 	return func() {
