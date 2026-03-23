@@ -20,7 +20,7 @@ func newPanicSafeTransport(base http.RoundTripper, logger Logger) http.RoundTrip
 	}
 	return &panicSafeTransport{
 		base:   effectiveBase,
-		logger: ensureLogger(logger),
+		logger: EnsureLogger(logger),
 	}
 }
 
@@ -56,7 +56,7 @@ func newPanicSafeReadCloser(body io.ReadCloser, url string, logger Logger) *pani
 	return &panicSafeReadCloser{
 		body:   body,
 		url:    url,
-		logger: ensureLogger(logger),
+		logger: EnsureLogger(logger),
 	}
 }
 
