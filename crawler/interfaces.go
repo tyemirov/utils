@@ -14,11 +14,6 @@ type RuleEvaluator interface {
 	ConfiguredVerifierCount() int
 }
 
-// DiscoverabilityProber evaluates search discoverability for a product identifier.
-type DiscoverabilityProber interface {
-	Probe(ctx context.Context, targetASIN string) (Discoverability, error)
-}
-
 // CookieGenerator returns cookies for a specific domain.
 type CookieGenerator func(domain string) []*http.Cookie
 
@@ -170,16 +165,6 @@ func ensureRequestHook(hook RequestHook) RequestHook {
 		return requestHookFunc(func(context.Context, Product) error {
 			return nil
 		})
-	}
-	return hook
-}
-
-// ImageStatusHook receives asynchronous image status transitions for a product identifier.
-type ImageStatusHook func(productID string, status ImageStatus)
-
-func ensureImageStatusHook(hook ImageStatusHook) ImageStatusHook {
-	if hook == nil {
-		return func(string, ImageStatus) {}
 	}
 	return hook
 }

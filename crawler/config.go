@@ -28,21 +28,6 @@ type Config struct {
 	// RuleEvaluator produces rule findings for a fetched document. Mandatory.
 	RuleEvaluator RuleEvaluator
 
-	// DiscoverabilityProber evaluates search discoverability metadata. Optional.
-	DiscoverabilityProber DiscoverabilityProber
-
-	// DiscoverabilityProbeTimeout caps each discoverability probe attempt.
-	DiscoverabilityProbeTimeout time.Duration
-
-	// DiscoverabilityProbeRetryCount controls additional retry attempts.
-	DiscoverabilityProbeRetryCount int
-
-	// DiscoverabilityProbeRetryBackoff controls delay between retry attempts.
-	DiscoverabilityProbeRetryBackoff time.Duration
-
-	// DiscoverabilityProbeParallelism caps concurrent discoverability probes.
-	DiscoverabilityProbeParallelism int
-
 	// CookieGenerator returns cookies for a given domain. Optional.
 	CookieGenerator CookieGenerator
 
@@ -58,13 +43,6 @@ type Config struct {
 
 	// RequestHook runs before each outbound request. Optional.
 	RequestHook RequestHook
-
-	// ImageStatusHook is invoked when image persistence reaches a terminal state.
-	ImageStatusHook ImageStatusHook
-
-	// ImageEncoder converts image data between formats. Optional; when nil
-	// image conversion is skipped.
-	ImageEncoder ImageEncoder
 
 	// Logger receives debug/info/warning/error logs. Optional; a no-op logger is
 	// used when nil.
@@ -98,7 +76,6 @@ type ScraperConfig struct {
 	RateLimit                  time.Duration
 	ProxyList                  []string
 	SaveFiles                  bool
-	RetrieveProductImages      bool
 	ProxyCircuitBreakerEnabled bool
 }
 
@@ -121,10 +98,9 @@ func (cfg ScraperConfig) Validate() error {
 
 // PlatformConfig restricts the crawler to known domains and provides selectors.
 type PlatformConfig struct {
-	AllowedDomains       []string
-	CookieDomains        []string
-	ProductImageSelector string
-	SkipRulesOnRedirect  bool
+	AllowedDomains      []string
+	CookieDomains       []string
+	SkipRulesOnRedirect bool
 }
 
 // Validate ensures the platform configuration is usable.

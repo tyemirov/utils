@@ -1,13 +1,6 @@
 package crawler
 
-import (
-	"bytes"
-	"fmt"
-	"image"
-	"image/color"
-	"image/jpeg"
-	"image/png"
-)
+import "fmt"
 
 type savedFile struct {
 	productID string
@@ -47,24 +40,4 @@ func (logger *capturingLogger) Warning(format string, args ...interface{}) {
 }
 func (logger *capturingLogger) Error(format string, args ...interface{}) {
 	logger.errors = append(logger.errors, fmt.Sprintf(format, args...))
-}
-
-func testImageBytes(format string) []byte {
-	rect := image.Rect(0, 0, 8, 8)
-	img := image.NewRGBA(rect)
-	for y := rect.Min.Y; y < rect.Max.Y; y++ {
-		for x := rect.Min.X; x < rect.Max.X; x++ {
-			img.Set(x, y, color.RGBA{R: uint8(x * 20), G: uint8(y * 20), B: 120, A: 255})
-		}
-	}
-	buffer := new(bytes.Buffer)
-	switch format {
-	case "png":
-		_ = png.Encode(buffer, img)
-	case "jpeg":
-		_ = jpeg.Encode(buffer, img, &jpeg.Options{Quality: 80})
-	default:
-		panic(fmt.Sprintf("unsupported format %s", format))
-	}
-	return buffer.Bytes()
 }

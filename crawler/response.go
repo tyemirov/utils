@@ -2,36 +2,16 @@ package crawler
 
 import (
 	"bytes"
-	"context"
-	"encoding/json"
-	"errors"
 	"fmt"
-	"html"
-	"net"
 	"net/http"
 	"path/filepath"
-	"strconv"
 	"strings"
-	"time"
 
 	"github.com/PuerkitoBio/goquery"
 	"github.com/gocolly/colly/v2"
 )
 
-// ImageEncoder converts image data from the source format to a target format.
-type ImageEncoder func(imageData []byte, fileExtension string) ([]byte, error)
-
-var convertToWebP ImageEncoder
-
 const detailIncompleteMessage = "detail page content missing"
-const imageUnavailableMessage = "image unavailable"
-
-const (
-	defaultDiscoverabilityProbeRetryCount   = 1
-	defaultDiscoverabilityProbeRetryBackoff = 500 * time.Millisecond
-	defaultDiscoverabilityProbeParallelism  = 8
-	maxDiscoverabilityProbeRetryDelay       = 5 * time.Second
-)
 
 // ResponseProcessor handles incoming responses and emits final results.
 type ResponseProcessor interface {
@@ -42,27 +22,20 @@ type ResponseProcessor interface {
 }
 
 type responseProcessor struct {
-	scraperConfig                    ScraperConfig
-	platformConfig                   PlatformConfig
-	ruleEvaluator                    RuleEvaluator
-	platformHooks                    PlatformHooks
-	retryHandler                     RetryHandler
-	proxyTracker                     proxyHealth
-	filePersister                    FilePersister
-	results                          chan<- *Result
-	platformID                       string
-	runFolder                        string
-	collector                        *colly.Collector
-	logger                           Logger
-	resultCallback                   func(*colly.Response)
-	responseHandlers                 []ResponseHandler
-	imageQueue                       chan<- imageJob
-	imageEncoder                     ImageEncoder
-	imageStatusHook                  ImageStatusHook
-	discoverabilityProber            DiscoverabilityProber
-	discoverabilityProbeRetryCount   int
-	discoverabilityProbeRetryBackoff time.Duration
-	discoverabilityProbeSemaphore    chan struct{}
+	scraperConfig    ScraperConfig
+	platformConfig   PlatformConfig
+	ruleEvaluator    RuleEvaluator
+	platformHooks    PlatformHooks
+	retryHandler     RetryHandler
+	proxyTracker     proxyHealth
+	filePersister    FilePersister
+	results          chan<- *Result
+	platformID       string
+	runFolder        string
+	collector        *colly.Collector
+	logger           Logger
+	resultCallback   func(*colly.Response)
+	responseHandlers []ResponseHandler
 }
 
 func newResponseProcessor(
@@ -72,50 +45,20 @@ func newResponseProcessor(
 	filePersister FilePersister,
 	results chan<- *Result,
 	logger Logger,
-	imageQueue chan<- imageJob,
 ) ResponseProcessor {
 	return &responseProcessor{
-		scraperConfig:                    cfg.Scraper,
-		platformConfig:                   cfg.Platform,
-		ruleEvaluator:                    cfg.RuleEvaluator,
-		platformHooks:                    ensurePlatformHooks(cfg.PlatformHooks),
-		retryHandler:                     retryHandler,
-		proxyTracker:                     proxyTracker,
-		filePersister:                    filePersister,
-		results:                          results,
-		platformID:                       cfg.PlatformID,
-		runFolder:                        strings.TrimSpace(cfg.RunFolder),
-		logger:                           logger,
-		imageQueue:                       imageQueue,
-		imageEncoder:                     cfg.ImageEncoder,
-		imageStatusHook:                  ensureImageStatusHook(cfg.ImageStatusHook),
-		discoverabilityProber:            cfg.DiscoverabilityProber,
-		discoverabilityProbeRetryCount:   resolveDiscoverabilityProbeRetryCount(cfg.DiscoverabilityProbeRetryCount),
-		discoverabilityProbeRetryBackoff: resolveDiscoverabilityProbeRetryBackoff(cfg.DiscoverabilityProbeRetryBackoff),
-		discoverabilityProbeSemaphore:    buildDiscoverabilityProbeSemaphore(cfg.DiscoverabilityProbeParallelism),
+		scraperConfig:  cfg.Scraper,
+		platformConfig: cfg.Platform,
+		ruleEvaluator:  cfg.RuleEvaluator,
+		platformHooks:  ensurePlatformHooks(cfg.PlatformHooks),
+		retryHandler:   retryHandler,
+		proxyTracker:   proxyTracker,
+		filePersister:  filePersister,
+		results:        results,
+		platformID:     cfg.PlatformID,
+		runFolder:      strings.TrimSpace(cfg.RunFolder),
+		logger:         logger,
 	}
-}
-
-func resolveDiscoverabilityProbeRetryCount(rawRetryCount int) int {
-	if rawRetryCount >= 0 {
-		return rawRetryCount
-	}
-	return defaultDiscoverabilityProbeRetryCount
-}
-
-func resolveDiscoverabilityProbeRetryBackoff(rawBackoff time.Duration) time.Duration {
-	if rawBackoff >= 0 {
-		return rawBackoff
-	}
-	return defaultDiscoverabilityProbeRetryBackoff
-}
-
-func buildDiscoverabilityProbeSemaphore(rawParallelism int) chan struct{} {
-	parallelism := rawParallelism
-	if parallelism <= 0 {
-		parallelism = defaultDiscoverabilityProbeParallelism
-	}
-	return make(chan struct{}, parallelism)
 }
 
 func (processor *responseProcessor) Setup(collector *colly.Collector) {
@@ -134,21 +77,6 @@ func (processor *responseProcessor) handleResponse(resp *colly.Response) {
 		if handler.HandleBinaryResponse(resp, productID, fileExtension) {
 			return
 		}
-	}
-
-	if productID != unknownProductID && isKnownImageExtension(fileExtension) {
-		if !looksLikeImagePayload(resp.Headers.Get("Content-Type"), resp.Body) {
-			processor.logger.Warning(
-				"%s for ProductID %s (content-type=%s)",
-				imageUnavailableMessage,
-				productID,
-				resp.Headers.Get("Content-Type"),
-			)
-			processor.retryImageOrDrop(resp, productID)
-			return
-		}
-		processor.enqueueImageConversion(resp, productID, fileExtension)
-		return
 	}
 
 	document, parseErr := goquery.NewDocumentFromReader(bytes.NewReader(resp.Body))
@@ -243,14 +171,6 @@ func (processor *responseProcessor) handleResponse(resp *colly.Response) {
 		handler.BeforeEvaluation(resp, document)
 	}
 
-	if processor.scraperConfig.RetrieveProductImages {
-		imageURL, err := processor.getProductImage(resp, document, productID)
-		if err != nil {
-			processor.logger.Error("Failed to get product image for %s, error: %v", productID, err)
-		}
-		resp.Ctx.Put(ctxProductImageURLKey, imageURL)
-	}
-
 	finalURL := ""
 	if resp.Request != nil && resp.Request.URL != nil {
 		finalURL = resp.Request.URL.String()
@@ -264,7 +184,6 @@ func (processor *responseProcessor) handleResponse(resp *colly.Response) {
 
 	originalURL := resp.Ctx.Get(ctxInitialURLKey)
 	processor.inferRedirect(productID, originalURL, finalURL, canonicalURL, resp.Ctx)
-	processor.probeDiscoverability(resp)
 
 	if processor.skipEvaluationOnRedirect(resp) {
 		return
@@ -313,14 +232,6 @@ func (processor *responseProcessor) recordProxySuccess(resp *colly.Response) {
 	processor.proxyTracker.RecordSuccess(proxyURL)
 }
 
-func (processor *responseProcessor) retryImageOrDrop(resp *colly.Response, productID string) {
-	if processor.retryHandler != nil && processor.retryHandler.Retry(resp, RetryOptions{}) {
-		return
-	}
-	ensureImageStatusHook(processor.imageStatusHook)(productID, ImageStatusFailed)
-	processor.logger.Warning("Image unavailable for ProductID %s after retries exhausted", productID)
-}
-
 func (processor *responseProcessor) retryByDecision(resp *colly.Response, decision RetryDecision) bool {
 	if processor.retryHandler == nil {
 		return false
@@ -359,270 +270,6 @@ func responseProxyURL(resp *colly.Response) string {
 		return ""
 	}
 	return strings.TrimSpace(resp.Request.ProxyURL)
-}
-
-func (processor *responseProcessor) enqueueImageConversion(resp *colly.Response, productID, fileExtension string) {
-	if processor.imageQueue == nil {
-		return
-	}
-	job := imageJob{
-		ProductID:   productID,
-		Data:        append([]byte(nil), resp.Body...),
-		Extension:   fileExtension,
-		ContentType: resp.Headers.Get("Content-Type"),
-		onSuccess: func() {
-			ensureImageStatusHook(processor.imageStatusHook)(productID, ImageStatusReady)
-		},
-		onFailure: func() {
-			processor.retryImageOrDrop(resp, productID)
-		},
-	}
-	processor.enqueueImageJob(job, productID)
-}
-
-func (processor *responseProcessor) enqueueImageJob(job imageJob, productID string) {
-	defer func() {
-		if recovered := recover(); recovered != nil {
-			if processor.logger != nil {
-				processor.logger.Warning("Image conversion queue closed while processing %s", productID)
-			}
-			if job.onFailure != nil {
-				job.onFailure()
-			}
-		}
-	}()
-	processor.imageQueue <- job
-}
-
-func (processor *responseProcessor) getProductImage(resp *colly.Response, document *goquery.Document, productID string) (string, error) {
-	imageSelector := processor.platformConfig.ProductImageSelector
-	var selection *goquery.Selection
-	if imageSelector != "" {
-		selection = document.Find(imageSelector).First()
-	}
-
-	candidates := gatherImageCandidates(selection)
-	if len(candidates) == 0 {
-		processor.persistHTMLSnapshot(productID, resp.Body)
-		fallback := document.Find("[data-a-dynamic-image]").First()
-		candidates = append(candidates, gatherImageCandidates(fallback)...)
-	}
-	if len(candidates) == 0 {
-		processor.persistHTMLSnapshot(productID, resp.Body)
-		fallback := document.Find("img[data-old-hires]").First()
-		candidates = append(candidates, gatherImageCandidates(fallback)...)
-	}
-
-	var imageURL string
-	for _, candidate := range candidates {
-		if candidate == "" {
-			continue
-		}
-		absolute := resp.Request.AbsoluteURL(candidate)
-		if absolute != "" {
-			imageURL = absolute
-			break
-		}
-	}
-	if imageURL == "" {
-		processor.persistHTMLSnapshot(productID, resp.Body)
-		resp.Ctx.Put(ctxProductImageStatusKey, string(ImageStatusFailed))
-		return "", fmt.Errorf("image not found for %s", productID)
-	}
-
-	if processor.filePersister == nil {
-		resp.Ctx.Put(ctxProductImageStatusKey, string(ImageStatusReady))
-		return imageURL, nil
-	}
-
-	if processor.collector != nil {
-		imageContext := colly.NewContext()
-		imageContext.Put(ctxProductIDKey, productID)
-		if err := processor.collector.Request(http.MethodGet, imageURL, nil, imageContext, nil); err != nil {
-			processor.logger.Warning("Failed to enqueue image download for %s: %v", productID, err)
-			resp.Ctx.Put(ctxProductImageStatusKey, string(ImageStatusFailed))
-			return "", fmt.Errorf("enqueue image download for %s: %w", productID, err)
-		}
-	}
-	fileName := fmt.Sprintf("%s.%s", productID, webpExtension)
-	resp.Ctx.Put(ctxProductImageStatusKey, string(ImageStatusPending))
-	return buildDownloadPath(processor.platformID, productID, processor.runFolder, fileName), nil
-}
-
-func (processor *responseProcessor) probeDiscoverability(resp *colly.Response) {
-	if processor == nil || resp == nil || resp.Ctx == nil {
-		return
-	}
-	originalProductID := getProductIDFromContext(resp)
-	targetASIN := normalizeASIN(resolveFinalProductID(resp.Ctx, originalProductID))
-	if targetASIN == "" || targetASIN == normalizeASIN(unknownProductID) {
-		return
-	}
-	runContext := getRunContextFromResponse(resp)
-	if !discoverabilityProbeEnabledFromContext(runContext) {
-		return
-	}
-	if processor.discoverabilityProber == nil {
-		return
-	}
-	probeParentContext := context.Background()
-	if runContext != nil {
-		probeParentContext = runContext
-	}
-	if !processor.acquireDiscoverabilityProbeSemaphore(probeParentContext) {
-		return
-	}
-	defer processor.releaseDiscoverabilityProbeSemaphore()
-
-	maxAttempts := processor.discoverabilityProbeRetryCount + 1
-	if maxAttempts <= 0 {
-		maxAttempts = 1
-	}
-	var probeError error
-	for attemptNumber := 1; attemptNumber <= maxAttempts; attemptNumber++ {
-		discoverability, err := processor.discoverabilityProber.Probe(probeParentContext, targetASIN)
-		if err == nil {
-			processor.setDiscoverabilityContext(resp.Ctx, discoverability)
-			return
-		}
-		probeError = err
-		if !processor.shouldRetryDiscoverabilityProbe(err, attemptNumber, maxAttempts) {
-			break
-		}
-		if waitErr := processor.waitBeforeDiscoverabilityProbeRetry(probeParentContext, attemptNumber); waitErr != nil {
-			break
-		}
-	}
-	if probeError != nil {
-		processor.logger.Warning("Failed discoverability probe for ProductID %s: %v", targetASIN, probeError)
-	}
-}
-
-func (processor *responseProcessor) shouldRetryDiscoverabilityProbe(
-	probeError error,
-	attemptNumber int,
-	maxAttempts int,
-) bool {
-	if probeError == nil {
-		return false
-	}
-	if attemptNumber >= maxAttempts {
-		return false
-	}
-	if errors.Is(probeError, context.Canceled) {
-		return false
-	}
-	if errors.Is(probeError, context.DeadlineExceeded) {
-		return true
-	}
-	var networkError net.Error
-	if errors.As(probeError, &networkError) {
-		if networkError.Timeout() {
-			return true
-		}
-	}
-	normalizedError := strings.ToLower(strings.TrimSpace(probeError.Error()))
-	if strings.Contains(normalizedError, "timeout") {
-		return true
-	}
-	if strings.Contains(normalizedError, "temporar") {
-		return true
-	}
-	if strings.Contains(normalizedError, "connection reset") {
-		return true
-	}
-	if strings.Contains(normalizedError, "connection refused") {
-		return true
-	}
-	return false
-}
-
-func (processor *responseProcessor) waitBeforeDiscoverabilityProbeRetry(
-	ctx context.Context,
-	attemptNumber int,
-) error {
-	retryDelay := processor.discoverabilityProbeRetryBackoff
-	if retryDelay <= 0 {
-		return nil
-	}
-	if attemptNumber < 1 {
-		attemptNumber = 1
-	}
-	for iteration := 1; iteration < attemptNumber; iteration++ {
-		if retryDelay >= maxDiscoverabilityProbeRetryDelay {
-			retryDelay = maxDiscoverabilityProbeRetryDelay
-			break
-		}
-		retryDelay = retryDelay * 2
-		if retryDelay >= maxDiscoverabilityProbeRetryDelay {
-			retryDelay = maxDiscoverabilityProbeRetryDelay
-			break
-		}
-	}
-	timer := time.NewTimer(retryDelay)
-	defer timer.Stop()
-	select {
-	case <-timer.C:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-}
-
-func (processor *responseProcessor) acquireDiscoverabilityProbeSemaphore(ctx context.Context) bool {
-	if processor == nil || processor.discoverabilityProbeSemaphore == nil {
-		return true
-	}
-	select {
-	case processor.discoverabilityProbeSemaphore <- struct{}{}:
-		return true
-	case <-ctx.Done():
-		return false
-	}
-}
-
-func (processor *responseProcessor) releaseDiscoverabilityProbeSemaphore() {
-	if processor == nil || processor.discoverabilityProbeSemaphore == nil {
-		return
-	}
-	select {
-	case <-processor.discoverabilityProbeSemaphore:
-	default:
-	}
-}
-
-func getRunContextFromResponse(resp *colly.Response) context.Context {
-	if resp == nil || resp.Ctx == nil {
-		return nil
-	}
-	runContext, ok := resp.Ctx.GetAny(ctxRunContextKey).(context.Context)
-	if !ok || runContext == nil {
-		return nil
-	}
-	return runContext
-}
-
-func (processor *responseProcessor) setDiscoverabilityContext(ctx *colly.Context, discoverability Discoverability) {
-	if ctx == nil {
-		return
-	}
-	normalizedStatus := NormalizeDiscoverabilityStatus(string(discoverability.Status))
-	if normalizedStatus != "" {
-		ctx.Put(ctxDiscoverabilityStatusKey, string(normalizedStatus))
-	}
-	if discoverability.TargetOrganicRank > 0 {
-		ctx.Put(ctxTargetOrganicRankKey, discoverability.TargetOrganicRank)
-	}
-	firstOrganicASIN := normalizeASIN(discoverability.FirstOrganicASIN)
-	if firstOrganicASIN != "" {
-		ctx.Put(ctxFirstOrganicASINKey, firstOrganicASIN)
-	}
-	if discoverability.SponsoredBeforeTargetCount > 0 {
-		ctx.Put(ctxSponsoredBeforeTargetCountKey, discoverability.SponsoredBeforeTargetCount)
-	}
-	if strings.TrimSpace(discoverability.SearchURL) != "" {
-		ctx.Put(ctxDiscoverabilitySearchURLKey, strings.TrimSpace(discoverability.SearchURL))
-	}
 }
 
 func (processor *responseProcessor) inferRedirect(productID, originalURL, finalURL, canonicalURL string, ctx *colly.Context) {
@@ -691,16 +338,6 @@ func (processor *responseProcessor) buildResult(resp *colly.Response, success bo
 	productURL := getContextValue(ctx, ctxProductURLKey, unknownURLValue)
 	productTitle := getContextValue(ctx, ctxProductTitleKey, titleNotFoundMessage)
 	productPlatform := getContextValue(ctx, ctxProductPlatformKey, unknownPlatformValue)
-	productImageURL := getContextValue(ctx, ctxProductImageURLKey, productImageNotFound)
-	productImageStatus := ResolveImageStatus(
-		ImageStatus(ctx.Get(ctxProductImageStatusKey)),
-		productImageURL,
-	)
-	discoverabilityStatus := NormalizeDiscoverabilityStatus(ctx.Get(ctxDiscoverabilityStatusKey))
-	targetOrganicRank := getContextInt(ctx, ctxTargetOrganicRankKey)
-	firstOrganicASIN := normalizeASIN(ctx.Get(ctxFirstOrganicASINKey))
-	sponsoredBeforeTargetCount := getContextInt(ctx, ctxSponsoredBeforeTargetCountKey)
-	discoverabilitySearchURL := strings.TrimSpace(ctx.Get(ctxDiscoverabilitySearchURLKey))
 
 	originalURL := ctx.Get(ctxInitialURLKey)
 	if originalURL == "" {
@@ -726,27 +363,20 @@ func (processor *responseProcessor) buildResult(resp *colly.Response, success bo
 	}
 
 	return &Result{
-		ProductID:                  finalProductID,
-		OriginalProductID:          originalProductID,
-		OriginalURL:                originalURL,
-		FinalURL:                   finalURL,
-		CanonicalURL:               canonicalURL,
-		ProxyURL:                   strings.TrimSpace(proxyURL),
-		ProductImageURL:            productImageURL,
-		ImageStatus:                productImageStatus,
-		DiscoverabilityStatus:      discoverabilityStatus,
-		TargetOrganicRank:          targetOrganicRank,
-		FirstOrganicASIN:           firstOrganicASIN,
-		SponsoredBeforeTargetCount: sponsoredBeforeTargetCount,
-		DiscoverabilitySearchURL:   discoverabilitySearchURL,
-		ProductURL:                 productURL,
-		ProductTitle:               productTitle,
-		ProductPlatform:            productPlatform,
-		Success:                    success,
-		ErrorMessage:               errorText,
-		HTTPStatusCode:             statusCode,
-		RuleResults:                ruleResults,
-		ConfiguredVerifierCount:    evaluation.ConfiguredVerifier,
+		ProductID:               finalProductID,
+		OriginalProductID:       originalProductID,
+		OriginalURL:             originalURL,
+		FinalURL:                finalURL,
+		CanonicalURL:            canonicalURL,
+		ProxyURL:                strings.TrimSpace(proxyURL),
+		ProductURL:              productURL,
+		ProductTitle:            productTitle,
+		ProductPlatform:         productPlatform,
+		Success:                 success,
+		ErrorMessage:            errorText,
+		HTTPStatusCode:          statusCode,
+		RuleResults:             ruleResults,
+		ConfiguredVerifierCount: evaluation.ConfiguredVerifier,
 	}
 }
 
@@ -792,21 +422,6 @@ func getContextValue(ctx *colly.Context, key, fallback string) string {
 	return fallback
 }
 
-func getContextInt(ctx *colly.Context, key string) int {
-	if value, ok := ctx.GetAny(key).(int); ok {
-		return value
-	}
-	raw := strings.TrimSpace(ctx.Get(key))
-	if raw == "" {
-		return 0
-	}
-	parsed, err := strconv.Atoi(raw)
-	if err != nil {
-		return 0
-	}
-	return parsed
-}
-
 func getErrorMessage(ctx *colly.Context) string {
 	switch val := ctx.GetAny(ctxProductErrorKey).(type) {
 	case error:
@@ -830,81 +445,6 @@ func extractCanonicalURL(document *goquery.Document) string {
 	return href
 }
 
-func gatherImageCandidates(selection *goquery.Selection) []string {
-	if selection == nil || selection.Length() == 0 {
-		return nil
-	}
-
-	var candidates []string
-	pushCandidate := func(value string) {
-		if trimmed := strings.TrimSpace(value); trimmed != "" {
-			candidates = append(candidates, trimmed)
-		}
-	}
-
-	if src := selection.AttrOr("src", ""); src != "" {
-		pushCandidate(src)
-	}
-	if oldHires := selection.AttrOr("data-old-hires", ""); oldHires != "" {
-		pushCandidate(oldHires)
-	}
-	if srcset := selection.AttrOr("srcset", ""); srcset != "" {
-		pushCandidate(extractFromSrcset(srcset))
-	}
-	if dynamic := selection.AttrOr("data-a-dynamic-image", ""); dynamic != "" {
-		if parsed := parseDynamicImageJSON(dynamic); parsed != "" {
-			pushCandidate(parsed)
-		}
-	}
-
-	return candidates
-}
-
-func parseDynamicImageJSON(raw string) string {
-	unescaped := html.UnescapeString(strings.TrimSpace(raw))
-	if unescaped == "" {
-		return ""
-	}
-	var parsed map[string][]int
-	if err := json.Unmarshal([]byte(unescaped), &parsed); err != nil {
-		return ""
-	}
-	bestURL := ""
-	bestScore := 0
-	for urlCandidate, dimensions := range parsed {
-		score := 0
-		if len(dimensions) >= 2 {
-			score = dimensions[0] * dimensions[1]
-		} else if len(dimensions) == 1 {
-			score = dimensions[0]
-		}
-		if score >= bestScore {
-			bestScore = score
-			bestURL = urlCandidate
-		}
-	}
-	return bestURL
-}
-
-func extractFromSrcset(srcset string) string {
-	if strings.TrimSpace(srcset) == "" {
-		return ""
-	}
-	parts := strings.Split(srcset, ",")
-	for i := len(parts) - 1; i >= 0; i-- {
-		chunk := strings.TrimSpace(parts[i])
-		if chunk == "" {
-			continue
-		}
-		fields := strings.Fields(chunk)
-		if len(fields) == 0 {
-			continue
-		}
-		return fields[0]
-	}
-	return ""
-}
-
 func extractDocumentTitle(document *goquery.Document) string {
 	if document == nil {
 		return ""
@@ -924,25 +464,18 @@ func normalizeTitleWhitespace(rawText string) string {
 	return strings.Join(fields, " ")
 }
 
-func isKnownImageExtension(fileExtension string) bool {
-	switch strings.ToLower(fileExtension) {
-	case ".jpg", ".jpeg", ".png", ".webp", ".avif", ".gif", ".bmp", ".tif", ".tiff":
+func looksLikeImagePayload(contentType string, body []byte) bool {
+	normalized := strings.ToLower(strings.TrimSpace(contentType))
+	if strings.HasPrefix(normalized, "image/") {
 		return true
-	default:
+	}
+	if len(body) == 0 {
 		return false
 	}
-}
-
-const webHTMLDownloadBasePath = "/download/html/"
-
-func buildDownloadPath(platformID, productID, runFolder, fileName string) string {
-	normalizedRunFolder := strings.TrimSpace(runFolder)
-	normalizedRunFolder = strings.ReplaceAll(normalizedRunFolder, "\\", "/")
-	if normalizedRunFolder == "" {
-		return filepath.Join(webHTMLDownloadBasePath, strings.TrimSpace(platformID), strings.TrimSpace(productID), strings.TrimSpace(fileName))
+	sample := body
+	if len(sample) > 512 {
+		sample = body[:512]
 	}
-	if strings.ContainsAny(normalizedRunFolder, "/\\") {
-		return filepath.Join(webHTMLDownloadBasePath, normalizedRunFolder, strings.TrimSpace(platformID), strings.TrimSpace(productID), strings.TrimSpace(fileName))
-	}
-	return filepath.Join(webHTMLDownloadBasePath, strings.TrimSpace(platformID), strings.TrimSpace(productID), normalizedRunFolder, strings.TrimSpace(fileName))
+	detected := http.DetectContentType(sample)
+	return strings.HasPrefix(strings.ToLower(detected), "image/")
 }

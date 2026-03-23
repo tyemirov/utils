@@ -27,8 +27,6 @@ type Service struct {
 	productSlots        chan struct{}
 	responseHandlers    []ResponseHandler
 	serviceHook         ServiceHook
-	imageQueue          chan imageJob
-	stopImageConverter  func()
 }
 
 const defaultCollyRequestTimeout = 10 * time.Second
@@ -73,16 +71,7 @@ func NewService(cfg Config, results chan<- *Result, options ...ServiceOption) (*
 		return nil, err
 	}
 
-	var (
-		imageQueue         chan imageJob
-		stopImageConverter func()
-	)
-	if cfg.Scraper.RetrieveProductImages && filePersister != nil {
-		imageQueue = make(chan imageJob, cfg.Scraper.Parallelism*2)
-		stopImageConverter = startImageConverter(imageQueue, filePersister, logger)
-	}
-
-	responseProcessor := newResponseProcessor(cfg, retryHandler, proxyTracker, filePersister, results, logger, imageQueue)
+	responseProcessor := newResponseProcessor(cfg, retryHandler, proxyTracker, filePersister, results, logger)
 
 	requestConfigurator.Configure(collector)
 	setupErrorHandling(collector, responseProcessor, retryHandler, proxyTracker, logger)
@@ -100,8 +89,6 @@ func NewService(cfg Config, results chan<- *Result, options ...ServiceOption) (*
 		requestHook:         requestHook,
 		productSlots:        make(chan struct{}, cfg.Scraper.Parallelism),
 		serviceHook:         noopServiceHook{},
-		imageQueue:          imageQueue,
-		stopImageConverter:  stopImageConverter,
 	}
 
 	for _, option := range options {
@@ -114,37 +101,10 @@ func NewService(cfg Config, results chan<- *Result, options ...ServiceOption) (*
 	contextTransport := newContextAwareTransport(transport, service.currentRunContext)
 	panicSafeTransport := newPanicSafeTransport(contextTransport, logger)
 	collector.WithTransport(panicSafeTransport)
-	bindDiscoverabilityProberNetwork(cfg, panicSafeTransport)
 
 	service.serviceHook.AfterInit(collector, panicSafeTransport)
 
 	return service, nil
-}
-
-type discoverabilityNetworkBinder interface {
-	bindNetwork(
-		platformID string,
-		transport http.RoundTripper,
-		timeout time.Duration,
-		requestHeaders RequestHeaderProvider,
-	)
-}
-
-func bindDiscoverabilityProberNetwork(cfg Config, transport http.RoundTripper) {
-	if cfg.DiscoverabilityProber == nil || transport == nil {
-		return
-	}
-
-	binder, ok := cfg.DiscoverabilityProber.(discoverabilityNetworkBinder)
-	if !ok {
-		return
-	}
-
-	timeout := cfg.DiscoverabilityProbeTimeout
-	if timeout <= 0 {
-		timeout = cfg.Scraper.HTTPTimeout
-	}
-	binder.bindNetwork(cfg.PlatformID, transport, timeout, cfg.RequestHeaders)
 }
 
 // Run visits each product URL once and blocks until completion or context cancellation.
@@ -182,10 +142,6 @@ Cleanup:
 	service.collector.Wait()
 
 	service.serviceHook.AfterRun()
-
-	if service.stopImageConverter != nil {
-		service.stopImageConverter()
-	}
 
 	if service.filePersister != nil {
 		if err := service.filePersister.Close(); err != nil {

@@ -9,7 +9,6 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -397,7 +396,6 @@ func TestServiceAllowsSlowStreamingResponsesPastHTTPTimeout(t *testing.T) {
 			RateLimit:                  0,
 			ProxyList:                  nil,
 			SaveFiles:                  false,
-			RetrieveProductImages:      false,
 			ProxyCircuitBreakerEnabled: false,
 		},
 		Platform: PlatformConfig{
@@ -474,7 +472,6 @@ func TestServiceAllowsSlowResponseHeadersPastHTTPTimeout(t *testing.T) {
 			RateLimit:                  0,
 			ProxyList:                  nil,
 			SaveFiles:                  false,
-			RetrieveProductImages:      false,
 			ProxyCircuitBreakerEnabled: false,
 		},
 		Platform: PlatformConfig{
@@ -531,7 +528,6 @@ func TestServiceTimesOutWhenResponseHeadersNeverArrive(t *testing.T) {
 			RateLimit:                  0,
 			ProxyList:                  nil,
 			SaveFiles:                  false,
-			RetrieveProductImages:      false,
 			ProxyCircuitBreakerEnabled: false,
 		},
 		Platform: PlatformConfig{
@@ -567,168 +563,6 @@ func TestServiceTimesOutWhenResponseHeadersNeverArrive(t *testing.T) {
 	}
 }
 
-func TestNewServiceBindsDiscoverabilityProberNetwork(t *testing.T) {
-	t.Parallel()
-
-	results := make(chan *Result, 1)
-	prober := &bindingDiscoverabilityProber{}
-
-	cfg := Config{
-		PlatformID: "AMZN",
-		Scraper: ScraperConfig{
-			MaxDepth:                   1,
-			Parallelism:                1,
-			RetryCount:                 0,
-			HTTPTimeout:                7 * time.Second,
-			RateLimit:                  0,
-			ProxyList:                  nil,
-			SaveFiles:                  false,
-			RetrieveProductImages:      false,
-			ProxyCircuitBreakerEnabled: false,
-		},
-		Platform: PlatformConfig{
-			AllowedDomains: []string{"example.com"},
-		},
-		RuleEvaluator:         fixedRuleEvaluator{},
-		DiscoverabilityProber: prober,
-		RequestHeaders: requestHeaderProviderFunc(func(_ string, _ *colly.Request) {
-		}),
-		Logger: noopLogger{},
-	}
-
-	service, err := NewService(cfg, results)
-	require.NoError(t, err)
-	require.NotNil(t, service)
-	require.True(t, prober.bound)
-	require.Equal(t, "AMZN", prober.platformID)
-	require.Equal(t, 7*time.Second, prober.timeout)
-	require.NotNil(t, prober.transport)
-	require.NotNil(t, prober.requestHeaders)
-}
-
-func TestServiceRunPropagatesRunContextDeadlineToDiscoverabilityProbe(t *testing.T) {
-	t.Parallel()
-
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
-		writer.Header().Set("Content-Type", "text/html")
-		_, _ = writer.Write([]byte("<html><head><title>Title</title></head><body><span id=\"productTitle\">Title</span></body></html>"))
-	}))
-	defer server.Close()
-
-	serverURL, err := url.Parse(server.URL)
-	require.NoError(t, err)
-
-	results := make(chan *Result, 1)
-	prober := &deadlineCapturingDiscoverabilityProber{}
-	cfg := Config{
-		PlatformID: "AMZN",
-		Scraper: ScraperConfig{
-			MaxDepth:                   1,
-			Parallelism:                1,
-			RetryCount:                 0,
-			HTTPTimeout:                2 * time.Second,
-			RateLimit:                  0,
-			ProxyList:                  nil,
-			SaveFiles:                  false,
-			RetrieveProductImages:      false,
-			ProxyCircuitBreakerEnabled: false,
-		},
-		Platform: PlatformConfig{
-			AllowedDomains: []string{serverURL.Hostname()},
-		},
-		RuleEvaluator:         fixedRuleEvaluator{},
-		DiscoverabilityProber: prober,
-		Logger:                noopLogger{},
-	}
-
-	service, err := NewService(cfg, results)
-	require.NoError(t, err)
-
-	runContext, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	parentDeadline, ok := runContext.Deadline()
-	require.True(t, ok)
-
-	err = service.Run(runContext, []Product{
-		{
-			ID:       "B00TARGET123",
-			Platform: "AMZN",
-			URL:      server.URL + "/dp/B00TARGET123",
-		},
-	})
-	require.NoError(t, err)
-
-	select {
-	case result := <-results:
-		require.True(t, result.Success)
-	case <-time.After(time.Second):
-		t.Fatal("expected crawler result")
-	}
-
-	prober.mu.Lock()
-	defer prober.mu.Unlock()
-	require.True(t, prober.hasDeadline)
-	require.WithinDuration(t, parentDeadline, prober.deadline, 100*time.Millisecond)
-}
-
-func TestServiceRunCancelsDiscoverabilityProbeWithRunContext(t *testing.T) {
-	t.Parallel()
-
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
-		writer.Header().Set("Content-Type", "text/html")
-		_, _ = writer.Write([]byte("<html><head><title>Title</title></head><body><span id=\"productTitle\">Title</span></body></html>"))
-	}))
-	defer server.Close()
-
-	serverURL, err := url.Parse(server.URL)
-	require.NoError(t, err)
-
-	results := make(chan *Result, 1)
-	runContext, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	prober := &cancelledRunDiscoverabilityProber{
-		triggerCancel: cancel,
-	}
-	cfg := Config{
-		PlatformID: "AMZN",
-		Scraper: ScraperConfig{
-			MaxDepth:                   1,
-			Parallelism:                1,
-			RetryCount:                 0,
-			HTTPTimeout:                2 * time.Second,
-			RateLimit:                  0,
-			ProxyList:                  nil,
-			SaveFiles:                  false,
-			RetrieveProductImages:      false,
-			ProxyCircuitBreakerEnabled: false,
-		},
-		Platform: PlatformConfig{
-			AllowedDomains: []string{serverURL.Hostname()},
-		},
-		RuleEvaluator:         fixedRuleEvaluator{},
-		DiscoverabilityProber: prober,
-		Logger:                noopLogger{},
-	}
-
-	service, err := NewService(cfg, results)
-	require.NoError(t, err)
-
-	err = service.Run(runContext, []Product{
-		{
-			ID:       "B00TARGET123",
-			Platform: "AMZN",
-			URL:      server.URL + "/dp/B00TARGET123",
-		},
-	})
-	require.ErrorIs(t, err, context.Canceled)
-
-	prober.mu.Lock()
-	defer prober.mu.Unlock()
-	require.True(t, prober.observedCancellation)
-	require.False(t, prober.timedOutWaitingForCancellation)
-}
-
 type blockingRequestTransport struct {
 	wait time.Duration
 }
@@ -750,74 +584,4 @@ func (fixedRuleEvaluator) Evaluate(_ string, _ *goquery.Document) (RuleEvaluatio
 
 func (fixedRuleEvaluator) ConfiguredVerifierCount() int {
 	return 0
-}
-
-type bindingDiscoverabilityProber struct {
-	bound          bool
-	platformID     string
-	transport      http.RoundTripper
-	timeout        time.Duration
-	requestHeaders RequestHeaderProvider
-}
-
-type deadlineCapturingDiscoverabilityProber struct {
-	mu          sync.Mutex
-	hasDeadline bool
-	deadline    time.Time
-}
-
-func (prober *deadlineCapturingDiscoverabilityProber) Probe(ctx context.Context, _ string) (Discoverability, error) {
-	prober.mu.Lock()
-	defer prober.mu.Unlock()
-	prober.deadline, prober.hasDeadline = ctx.Deadline()
-	return Discoverability{
-		Status: DiscoverabilityStatusNotFound,
-	}, nil
-}
-
-type cancelledRunDiscoverabilityProber struct {
-	mu                             sync.Mutex
-	triggerCancel                  context.CancelFunc
-	observedCancellation           bool
-	timedOutWaitingForCancellation bool
-}
-
-func (prober *cancelledRunDiscoverabilityProber) Probe(ctx context.Context, _ string) (Discoverability, error) {
-	prober.mu.Lock()
-	cancel := prober.triggerCancel
-	prober.triggerCancel = nil
-	prober.mu.Unlock()
-	if cancel != nil {
-		cancel()
-	}
-
-	select {
-	case <-ctx.Done():
-		prober.mu.Lock()
-		prober.observedCancellation = true
-		prober.mu.Unlock()
-		return Discoverability{}, ctx.Err()
-	case <-time.After(300 * time.Millisecond):
-		prober.mu.Lock()
-		prober.timedOutWaitingForCancellation = true
-		prober.mu.Unlock()
-		return Discoverability{}, errors.New("discoverability probe context was not cancelled")
-	}
-}
-
-func (prober *bindingDiscoverabilityProber) Probe(_ context.Context, _ string) (Discoverability, error) {
-	return Discoverability{}, nil
-}
-
-func (prober *bindingDiscoverabilityProber) bindNetwork(
-	platformID string,
-	transport http.RoundTripper,
-	timeout time.Duration,
-	requestHeaders RequestHeaderProvider,
-) {
-	prober.bound = true
-	prober.platformID = platformID
-	prober.transport = transport
-	prober.timeout = timeout
-	prober.requestHeaders = requestHeaders
 }

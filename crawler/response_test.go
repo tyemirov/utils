@@ -1,12 +1,10 @@
 package crawler
 
 import (
-	"context"
 	"errors"
 	"net/http"
 	"net/url"
 	"os"
-	"path"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -47,55 +45,6 @@ func TestResponseProcessorSaveFilePropagatesErrors(t *testing.T) {
 	err := processor.saveFile("prod", "file.html", []byte("payload"))
 	require.ErrorIs(t, err, expectedErr)
 	require.Equal(t, []string{"prod:file.html"}, persister.saved)
-}
-
-func TestEnqueueImageConversionBlocksUntilCapacityAvailable(t *testing.T) {
-	queue := make(chan imageJob, 1)
-	processor := &responseProcessor{
-		imageQueue: queue,
-		logger:     noopLogger{},
-	}
-	headers := http.Header{}
-	resp := &colly.Response{
-		Body:    []byte("fake image bytes"),
-		Headers: &headers,
-		Ctx:     colly.NewContext(),
-		Request: &colly.Request{Ctx: colly.NewContext()},
-	}
-	resp.Headers.Set("Content-Type", "image/jpeg")
-
-	queue <- imageJob{ProductID: "blocker"}
-
-	done := make(chan struct{})
-	go func() {
-		processor.enqueueImageConversion(resp, "ASIN123", ".jpg")
-		close(done)
-	}()
-
-	select {
-	case <-done:
-		t.Fatal("expected enqueue to block while queue is full")
-	default:
-	}
-
-	<-queue
-
-	var received imageJob
-	select {
-	case received = <-queue:
-	case <-time.After(1 * time.Second):
-		t.Fatal("timed out waiting for image job after freeing capacity")
-	}
-
-	require.Equal(t, "ASIN123", received.ProductID)
-	require.Equal(t, ".jpg", received.Extension)
-	require.NotNil(t, received.onFailure)
-
-	select {
-	case <-done:
-	case <-time.After(1 * time.Second):
-		t.Fatal("enqueue did not unblock after capacity was released")
-	}
 }
 
 func TestSendFinalResultWaitsForReceiver(t *testing.T) {
@@ -178,41 +127,6 @@ func TestSendFinalResultInvokesCallbackBeforeSendCompletes(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("SendFinalResult did not return after receiver became ready")
 	}
-}
-
-func TestParseDynamicImageJSONSelectsLargestAsset(t *testing.T) {
-	raw := `{"https://cdn/low.jpg":[100,100],"https://cdn/high.jpg":[500,600]}`
-	require.Equal(t, "https://cdn/high.jpg", parseDynamicImageJSON(raw))
-
-	require.Equal(t, "", parseDynamicImageJSON("{malformed"))
-	require.Equal(t, "", parseDynamicImageJSON(""))
-}
-
-func TestExtractFromSrcsetPicksLastCandidate(t *testing.T) {
-	raw := "https://cdn/low.jpg 200w, https://cdn/high.jpg 400w"
-	require.Equal(t, "https://cdn/high.jpg", extractFromSrcset(raw))
-	require.Equal(t, "", extractFromSrcset(""))
-}
-
-func TestGatherImageCandidatesPrefersExplicitAttributes(t *testing.T) {
-	html := `
-		<img
-			src="https://cdn/current.jpg"
-			data-old-hires="https://cdn/hires.jpg"
-			srcset="https://cdn/mid.jpg 200w, https://cdn/best.jpg 400w"
-			data-a-dynamic-image="{&quot;https://cdn/dynamic.jpg&quot;:[600,600]}"
-		>`
-	doc, err := goquery.NewDocumentFromReader(strings.NewReader(html))
-	require.NoError(t, err)
-	selection := doc.Find("img").First()
-	candidates := gatherImageCandidates(selection)
-
-	require.Equal(t, []string{
-		"https://cdn/current.jpg",
-		"https://cdn/hires.jpg",
-		"https://cdn/best.jpg",
-		"https://cdn/dynamic.jpg",
-	}, candidates)
 }
 
 func TestPersistHTMLSnapshotWritesWhenBodyPresent(t *testing.T) {
@@ -298,30 +212,6 @@ func (hooks retryingPlatformHooks) ShouldRetry(_ string, document *goquery.Docum
 		}
 	}
 	return RetryDecision{}
-}
-
-func TestGetProductImagePersistsHtmlWhenNoCandidates(t *testing.T) {
-	persister := &stubFilePersister{}
-	processor := &responseProcessor{
-		filePersister: persister,
-		logger:        noopLogger{},
-	}
-
-	resp := &colly.Response{
-		Body: []byte("<html><body>No image</body></html>"),
-		Ctx:  colly.NewContext(),
-		Request: &colly.Request{
-			Ctx: colly.NewContext(),
-		},
-	}
-
-	document, err := goquery.NewDocumentFromReader(strings.NewReader("<html><body></body></html>"))
-	require.NoError(t, err)
-
-	_, imageErr := processor.getProductImage(resp, document, "ASIN123")
-	require.Error(t, imageErr)
-	require.GreaterOrEqual(t, len(persister.saved), 1)
-	require.Equal(t, "ASIN123:ASIN123.html", persister.saved[len(persister.saved)-1])
 }
 
 func TestHandleResponseContinuesEvaluationAfterWrongDeliveryContextRetriesExhausted(t *testing.T) {
@@ -468,85 +358,6 @@ func TestHandleResponseWrongDeliveryContextFallsBackToDefaultRetryWithoutAlterna
 	}
 }
 
-func TestGetProductImageUsesRunFolderInDownloadPath(t *testing.T) {
-	persister := &stubFilePersister{}
-	processor := &responseProcessor{
-		filePersister: persister,
-		logger:        noopLogger{},
-		platformID:    "AMZN",
-		runFolder:     "1700000000",
-		platformConfig: PlatformConfig{
-			ProductImageSelector: "img",
-		},
-	}
-
-	html := `<img src="https://cdn/example.jpg">`
-	document, err := goquery.NewDocumentFromReader(strings.NewReader(html))
-	require.NoError(t, err)
-	pageURL, err := url.Parse("https://example.com/product")
-	require.NoError(t, err)
-
-	resp := &colly.Response{
-		Body: []byte(html),
-		Ctx:  colly.NewContext(),
-		Request: &colly.Request{
-			Ctx: colly.NewContext(),
-			URL: pageURL,
-		},
-	}
-
-	imageURL, imageErr := processor.getProductImage(resp, document, "ASIN123")
-	require.NoError(t, imageErr)
-	require.Equal(t, string(ImageStatusPending), resp.Ctx.Get(ctxProductImageStatusKey))
-	expectedPath := path.Join("/download/html", "AMZN", "ASIN123", "1700000000", "ASIN123."+webpExtension)
-	require.Equal(t, expectedPath, imageURL)
-}
-
-func TestGetProductImageSetsReadyStatusWhenPersistenceDisabled(t *testing.T) {
-	processor := &responseProcessor{
-		logger:     noopLogger{},
-		platformID: "AMZN",
-		platformConfig: PlatformConfig{
-			ProductImageSelector: "img",
-		},
-	}
-
-	html := `<img src="https://cdn.example.com/example.jpg">`
-	document, err := goquery.NewDocumentFromReader(strings.NewReader(html))
-	require.NoError(t, err)
-	pageURL, err := url.Parse("https://example.com/product")
-	require.NoError(t, err)
-	resp := &colly.Response{
-		Body: []byte(html),
-		Ctx:  colly.NewContext(),
-		Request: &colly.Request{
-			Ctx: colly.NewContext(),
-			URL: pageURL,
-		},
-	}
-
-	imageURL, imageErr := processor.getProductImage(resp, document, "ASIN123")
-	require.NoError(t, imageErr)
-	require.Equal(t, "https://cdn.example.com/example.jpg", imageURL)
-	require.Equal(t, string(ImageStatusReady), resp.Ctx.Get(ctxProductImageStatusKey))
-}
-
-func TestRetryImageOrDropPublishesFailedImageStatus(t *testing.T) {
-	var statuses []ImageStatus
-	processor := &responseProcessor{
-		retryHandler: newRetryHandler(ScraperConfig{RetryCount: 0}, noopLogger{}),
-		logger:       noopLogger{},
-		imageStatusHook: func(_ string, status ImageStatus) {
-			statuses = append(statuses, status)
-		},
-	}
-	response := newTestResponse("ASIN123")
-
-	processor.retryImageOrDrop(response, "ASIN123")
-
-	require.Equal(t, []ImageStatus{ImageStatusFailed}, statuses)
-}
-
 func TestNoopPlatformHooksIsContentCompleteDefaultsToTrue(t *testing.T) {
 	hooks := noopPlatformHooks{}
 	require.True(t, hooks.IsContentComplete(nil))
@@ -639,69 +450,6 @@ func TestSkipEvaluationOnRedirectIgnoresMissingRedirectID(t *testing.T) {
 	}
 }
 
-func TestProbeDiscoverabilityUsesResolvedRedirectedASIN(t *testing.T) {
-	prober := &captureDiscoverabilityProber{
-		discoverability: Discoverability{
-			Status:                     DiscoverabilityStatusFirstOrganic,
-			TargetOrganicRank:          1,
-			FirstOrganicASIN:           "B00FINAL123",
-			SponsoredBeforeTargetCount: 0,
-			SearchURL:                  buildAmazonSearchURL("B00FINAL123"),
-		},
-	}
-	processor := &responseProcessor{
-		platformID:            "AMZN",
-		discoverabilityProber: prober,
-		logger:                noopLogger{},
-	}
-	resp := newTestResponse("B00ORIGIN123")
-	resp.Ctx.Put(ctxRedirectedProductKey, "B00FINAL123")
-
-	processor.probeDiscoverability(resp)
-
-	require.Equal(t, "B00FINAL123", prober.lastTargetASIN)
-	require.Equal(t, string(DiscoverabilityStatusFirstOrganic), resp.Ctx.Get(ctxDiscoverabilityStatusKey))
-	require.Equal(t, "B00FINAL123", resp.Ctx.Get(ctxFirstOrganicASINKey))
-	require.Equal(t, buildAmazonSearchURL("B00FINAL123"), resp.Ctx.Get(ctxDiscoverabilitySearchURLKey))
-}
-
-func TestProbeDiscoverabilityWithoutProberSkipsDiscoverabilityMetadata(t *testing.T) {
-	processor := &responseProcessor{
-		platformID: "AMZN",
-		logger:     noopLogger{},
-	}
-	resp := newTestResponse("B00ORIGIN123")
-	resp.Ctx.Put(ctxRedirectedProductKey, "B00FINAL123")
-
-	processor.probeDiscoverability(resp)
-
-	require.Equal(t, "", resp.Ctx.Get(ctxDiscoverabilityStatusKey))
-	require.Equal(t, "", resp.Ctx.Get(ctxDiscoverabilitySearchURLKey))
-}
-
-func TestProbeDiscoverabilityRespectsRunContextDisableFlag(t *testing.T) {
-	prober := &captureDiscoverabilityProber{
-		discoverability: Discoverability{
-			Status:    DiscoverabilityStatusFirstOrganic,
-			SearchURL: buildAmazonSearchURL("B00FINAL123"),
-		},
-	}
-	processor := &responseProcessor{
-		platformID:            "AMZN",
-		discoverabilityProber: prober,
-		logger:                noopLogger{},
-	}
-	resp := newTestResponse("B00ORIGIN123")
-	resp.Ctx.Put(ctxRedirectedProductKey, "B00FINAL123")
-	resp.Ctx.Put(ctxRunContextKey, WithDiscoverabilityProbeEnabled(context.Background(), false))
-
-	processor.probeDiscoverability(resp)
-
-	require.Equal(t, "", prober.lastTargetASIN)
-	require.Equal(t, "", resp.Ctx.Get(ctxDiscoverabilityStatusKey))
-	require.Equal(t, "", resp.Ctx.Get(ctxDiscoverabilitySearchURLKey))
-}
-
 func TestHandleResponseUsesAmazonDOMTitleWhenPresent(t *testing.T) {
 	cases := []struct {
 		name     string
@@ -733,7 +481,6 @@ func TestHandleResponseUsesAmazonDOMTitleWhenPresent(t *testing.T) {
 
 			results := make(chan *Result, 1)
 			processor := &responseProcessor{
-				scraperConfig: ScraperConfig{RetrieveProductImages: false},
 				platformID:    "AMZN",
 				platformHooks: domTitlePlatformHooks{selector: "#productTitle"},
 				retryHandler:  newRetryHandler(ScraperConfig{RetryCount: 0}, noopLogger{}),
@@ -794,18 +541,4 @@ func loadDocumentFromFile(t *testing.T, path string) *goquery.Document {
 	doc, err := goquery.NewDocumentFromReader(file)
 	require.NoError(t, err)
 	return doc
-}
-
-type captureDiscoverabilityProber struct {
-	lastTargetASIN  string
-	discoverability Discoverability
-	err             error
-}
-
-func (prober *captureDiscoverabilityProber) Probe(_ context.Context, targetASIN string) (Discoverability, error) {
-	prober.lastTargetASIN = targetASIN
-	if prober.err != nil {
-		return Discoverability{}, prober.err
-	}
-	return prober.discoverability, nil
 }

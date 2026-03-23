@@ -44,7 +44,7 @@ func TestRequestHookFailureSkipsRequest(testContext *testing.T) {
 			RateLimit:                  0,
 			ProxyList:                  nil,
 			SaveFiles:                  false,
-			RetrieveProductImages:      false,
+
 			ProxyCircuitBreakerEnabled: false,
 		},
 		Platform: PlatformConfig{
