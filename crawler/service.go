@@ -41,7 +41,7 @@ func NewService(cfg Config, results chan<- *Result, options ...ServiceOption) (*
 		return nil, err
 	}
 
-	logger := ensureLogger(cfg.Logger)
+	logger := EnsureLogger(cfg.Logger)
 	filePersister := cfg.FilePersister
 	if filePersister == nil && cfg.OutputDirectory != "" {
 		filePersister = newDirectoryFilePersister(cfg.OutputDirectory, cfg.PlatformID, cfg.RunFolder)

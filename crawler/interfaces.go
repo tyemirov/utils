@@ -48,7 +48,8 @@ func SetPackageLogger(logger Logger) {
 	}
 }
 
-func ensureLogger(logger Logger) Logger {
+// EnsureLogger returns the provided logger if non-nil, otherwise a no-op logger.
+func EnsureLogger(logger Logger) Logger {
 	if logger == nil {
 		return noopLogger{}
 	}
