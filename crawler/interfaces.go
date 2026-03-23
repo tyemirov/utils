@@ -92,9 +92,16 @@ type ResponseHandler interface {
 	// before rule evaluation. Use for tasks like image retrieval.
 	BeforeEvaluation(resp *colly.Response, document *goquery.Document)
 
-	// AfterEvaluation is called after rule evaluation and result emission.
-	// Use for tasks like discoverability probing or file persistence.
+	// AfterEvaluation is called once the processor has enough context to build
+	// the final result, before that result is emitted. Use for tasks like
+	// discoverability probing or file persistence.
 	AfterEvaluation(resp *colly.Response, document *goquery.Document, result *Result)
+}
+
+// ResponseHandlerRuntimeBinder fills runtime-managed dependencies on handlers
+// after the crawler service has created them.
+type ResponseHandlerRuntimeBinder interface {
+	BindRuntime(collector *colly.Collector, filePersister FilePersister, retryHandler RetryHandler)
 }
 
 // NoopResponseHandler provides default no-op implementations of ResponseHandler.

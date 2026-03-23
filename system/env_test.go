@@ -2,6 +2,7 @@ package system
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -49,6 +50,36 @@ func TestExpandEnvVar(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestGetEnvOrFailSuccess(t *testing.T) {
+	t.Setenv("TEST_GET_ENV_SUCCESS", "myvalue")
+	got := GetEnvOrFail("TEST_GET_ENV_SUCCESS")
+	if got != "myvalue" {
+		t.Fatalf("expected myvalue, got %s", got)
+	}
+}
+
+func TestGetEnvOrFailMissing(t *testing.T) {
+	t.Setenv("TEST_GET_ENV_MISSING", "")
+	os.Unsetenv("TEST_GET_ENV_MISSING")
+
+	var called bool
+	var gotFormat string
+	original := logFatalf
+	logFatalf = func(format string, args ...any) {
+		called = true
+		gotFormat = fmt.Sprintf(format, args...)
+	}
+	defer func() { logFatalf = original }()
+
+	GetEnvOrFail("TEST_GET_ENV_MISSING")
+	if !called {
+		t.Fatal("expected logFatalf to be called")
+	}
+	if !strings.Contains(gotFormat, "TEST_GET_ENV_MISSING") {
+		t.Fatalf("expected error message to contain var name, got %s", gotFormat)
 	}
 }
 

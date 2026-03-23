@@ -436,3 +436,72 @@ func TestExtractMessageContentErrorsOnRefusalWhenContentUnsupported(t *testing.T
 		t.Fatalf("expected refusal error, got content=%q err=%v", content, err)
 	}
 }
+
+func TestValidateResponseFormatNonJSONSchemaType(t *testing.T) {
+	err := validateResponseFormat(&ResponseFormat{Type: "text"})
+	if err != nil {
+		t.Fatalf("expected no error for non json_schema type, got %v", err)
+	}
+}
+
+func TestValidateResponseFormatEmptySchema(t *testing.T) {
+	err := validateResponseFormat(&ResponseFormat{Type: "json_schema", Name: "test"})
+	if err == nil || !strings.Contains(err.Error(), "schema is required") {
+		t.Fatalf("expected schema required error, got %v", err)
+	}
+}
+
+type errorCloseReadCloser struct {
+	reader io.Reader
+}
+
+func (e errorCloseReadCloser) Read(p []byte) (int, error) {
+	return e.reader.Read(p)
+}
+
+func (e errorCloseReadCloser) Close() error {
+	return errors.New("close failed")
+}
+
+func TestClientChatClosesResponseBodyErrorOnClose(t *testing.T) {
+	client := &Client{
+		baseURL: "http://example.com",
+		apiKey:  "token",
+		model:   "model",
+		httpClient: stubHTTPClient{do: func(request *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       errorCloseReadCloser{reader: strings.NewReader(`{"error":"protocol broken"}`)},
+			}, errors.New("transport failed")
+		}},
+		timeout: time.Second,
+	}
+
+	_, err := client.Chat(context.Background(), ChatRequest{Messages: []Message{{Role: "user", Content: "hello"}}})
+	if err == nil {
+		t.Fatalf("expected error")
+	}
+	if !strings.Contains(err.Error(), "send llm request") {
+		t.Fatalf("expected send request error, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "close failed") {
+		t.Fatalf("expected close error to be joined, got %v", err)
+	}
+}
+
+func TestClientChatMarshalError(t *testing.T) {
+	client := &Client{
+		baseURL:    "http://example.com",
+		apiKey:     "token",
+		model:      "model",
+		httpClient: stubHTTPClient{},
+		timeout:    time.Second,
+		marshalFn: func(_ interface{}) ([]byte, error) {
+			return nil, errors.New("marshal boom")
+		},
+	}
+	_, err := client.Chat(context.Background(), ChatRequest{Messages: []Message{{Role: "user", Content: "hi"}}})
+	if err == nil || !strings.Contains(err.Error(), "marshal boom") {
+		t.Fatalf("expected marshal error, got %v", err)
+	}
+}

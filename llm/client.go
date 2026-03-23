@@ -52,6 +52,8 @@ type Client struct {
 	temperature         float64
 	httpClient          HTTPClient
 	timeout             time.Duration
+	// marshalFn is injected for testing; defaults to json.Marshal.
+	marshalFn func(v interface{}) ([]byte, error)
 }
 
 // Message represents a chat message role/content pair.
@@ -161,7 +163,11 @@ func (client *Client) Chat(ctx context.Context, request ChatRequest) (string, er
 		return "", fmt.Errorf("encode llm request: %w", responseFormatError)
 	}
 	payload := client.buildRequestPayload(request)
-	requestBytes, marshalError := json.Marshal(payload)
+	marshal := client.marshalFn
+	if marshal == nil {
+		marshal = json.Marshal
+	}
+	requestBytes, marshalError := marshal(payload)
 	if marshalError != nil {
 		return "", fmt.Errorf("encode llm request: %w", marshalError)
 	}

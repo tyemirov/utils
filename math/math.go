@@ -5,9 +5,13 @@ package math
 import (
 	"crypto/rand"
 	"fmt"
+	"io"
 	"math"
 	"strings"
 )
+
+// randReader is the source of randomness for ChanceOf. Tests may override it.
+var randReader io.Reader = rand.Reader
 
 // Min returns the smaller of the two provided integers.
 func Min(a int, b int) int {
@@ -59,7 +63,7 @@ func ChanceOf(probability float64) bool {
 	// Generate random byte (0-255)
 	randomBytes := make([]byte, 1)
 	// Fill the buffer with random bytes
-	_, err := rand.Read(randomBytes)
+	_, err := randReader.Read(randomBytes)
 	if err != nil {
 		fmt.Println("Error reading random bytes:", err)
 		return false

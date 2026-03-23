@@ -389,7 +389,7 @@ func TestSkipEvaluationOnRedirectSendsFailure(t *testing.T) {
 	resp.Ctx.Put(ctxRedirectedProductKey, "B00REDIRECT")
 	resp.Ctx.Put(ctxRedirectedKey, true)
 
-	skipped := processor.skipEvaluationOnRedirect(resp)
+	skipped := processor.skipEvaluationOnRedirect(resp, nil)
 	require.True(t, skipped)
 
 	select {
@@ -405,6 +405,36 @@ func TestSkipEvaluationOnRedirectSendsFailure(t *testing.T) {
 	require.Equal(t, 7, eval.ConfiguredVerifier)
 }
 
+func TestSkipEvaluationOnRedirectCallsAfterEvaluationHandlers(t *testing.T) {
+	results := make(chan *Result, 1)
+	handler := &recordingResponseHandler{}
+	processor := &responseProcessor{
+		platformConfig: PlatformConfig{
+			SkipRulesOnRedirect: true,
+		},
+		ruleEvaluator:    &countingRuleEvaluator{configured: 7},
+		results:          results,
+		logger:           noopLogger{},
+		responseHandlers: []ResponseHandler{handler},
+	}
+	resp := newTestResponse("ASIN123")
+	resp.Ctx.Put(ctxRedirectedProductKey, "B00REDIRECT")
+	resp.Ctx.Put(ctxRedirectedKey, true)
+
+	document, err := goquery.NewDocumentFromReader(strings.NewReader(`<html><body><div id="redirected"></div></body></html>`))
+	require.NoError(t, err)
+
+	skipped := processor.skipEvaluationOnRedirect(resp, document)
+	require.True(t, skipped)
+
+	result := <-results
+	require.False(t, result.Success)
+	require.Equal(t, "B00REDIRECT", result.ProductID)
+	require.Equal(t, 1, handler.afterEvalCalls)
+	require.Len(t, handler.afterEvalResults, 1)
+	require.Same(t, result, handler.afterEvalResults[0])
+}
+
 func TestSkipEvaluationOnRedirectRespectsConfigFlag(t *testing.T) {
 	results := make(chan *Result, 1)
 	processor := &responseProcessor{
@@ -418,7 +448,7 @@ func TestSkipEvaluationOnRedirectRespectsConfigFlag(t *testing.T) {
 	resp := newTestResponse("ASIN123")
 	resp.Ctx.Put(ctxRedirectedProductKey, "OTHERASIN")
 
-	skipped := processor.skipEvaluationOnRedirect(resp)
+	skipped := processor.skipEvaluationOnRedirect(resp, nil)
 	require.False(t, skipped)
 
 	select {
@@ -440,7 +470,7 @@ func TestSkipEvaluationOnRedirectIgnoresMissingRedirectID(t *testing.T) {
 	resp := newTestResponse("ASIN123")
 	resp.Ctx.Put(ctxRedirectedKey, true)
 
-	skipped := processor.skipEvaluationOnRedirect(resp)
+	skipped := processor.skipEvaluationOnRedirect(resp, nil)
 	require.False(t, skipped)
 
 	select {

@@ -33,13 +33,13 @@ func TestCrawlerHandlesSyntheticLoad(t *testing.T) {
 	cfg := Config{
 		PlatformID: "AMZN",
 		Scraper: ScraperConfig{
-			MaxDepth:                   1,
-			Parallelism:                128,
-			RetryCount:                 1,
-			HTTPTimeout:                0,
-			RateLimit:                  0,
-			ProxyList:                  nil,
-			SaveFiles:                  false,
+			MaxDepth:    1,
+			Parallelism: 128,
+			RetryCount:  1,
+			HTTPTimeout: 0,
+			RateLimit:   0,
+			ProxyList:   nil,
+			SaveFiles:   false,
 
 			ProxyCircuitBreakerEnabled: false,
 		},
