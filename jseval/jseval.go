@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/chromedp/cdproto/fetch"
+	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/chromedp"
 	"golang.org/x/net/proxy"
 )
@@ -67,6 +68,18 @@ func RenderPage(ctx context.Context, targetURL string, config Config) (*Result, 
 		chromedp.Flag("disable-gpu", true),
 		chromedp.Flag("no-sandbox", true),
 		chromedp.Flag("disable-dev-shm-usage", true),
+
+		// Anti-bot stealth flags: hide automation markers from sites
+		chromedp.Flag("disable-blink-features", "AutomationControlled"),
+		chromedp.Flag("exclude-switches", "enable-automation"),
+		chromedp.Flag("disable-infobars", true),
+		chromedp.Flag("disable-extensions", true),
+		chromedp.Flag("disable-popup-blocking", true),
+		chromedp.Flag("disable-default-apps", true),
+
+		// Realistic viewport and rendering
+		chromedp.WindowSize(1920, 1080),
+		chromedp.Flag("lang", "en-US,en"),
 	)
 
 	var localForwarder *socksForwarder
@@ -132,6 +145,25 @@ func RenderPage(ctx context.Context, targetURL string, config Config) (*Result, 
 	var renderedHTML string
 	var documentTitle string
 	var finalURL string
+
+	// Inject stealth scripts before any page loads to hide automation markers.
+	// This runs at document creation time, before any page JS executes.
+	stealthJS := `
+		Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+		Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+		Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+		window.chrome = { runtime: {} };
+		const originalQuery = window.navigator.permissions.query;
+		window.navigator.permissions.query = (parameters) => (
+			parameters.name === 'notifications' ?
+				Promise.resolve({ state: Notification.permission }) :
+				originalQuery(parameters)
+		);
+	`
+	chromedp.Run(renderCtx, chromedp.ActionFunc(func(ctx context.Context) error {
+		_, addScriptErr := page.AddScriptToEvaluateOnNewDocument(stealthJS).Do(ctx)
+		return addScriptErr
+	}))
 
 	actions := []chromedp.Action{
 		chromedp.Navigate(targetURL),
