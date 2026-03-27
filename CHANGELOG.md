@@ -1,5 +1,30 @@
 # Changelog
 
+## [v0.9.0] - 2026-03-27
+
+### Features ✨
+- Introduced a new dual-provider billing package supporting Paddle and Stripe billing integrations.
+- Added comprehensive webhook processors for subscription status, grant processing, and webhook chaining.
+- Included full coverage tests for jseval proxy, SOCKS5 forwarder, and authentication modules.
+
+### Improvements ⚙️
+- Enhanced billing package for data race prevention, improved security, TOCTOU race fixes, and better error handling.
+- Reformatted billing test files and improved static code checks, including typed nil context usage in tests.
+- Optimized Paddle webhook grant resolver to skip invalid plans and packs with empty or zero credits.
+
+### Bug Fixes 🐛
+- Fixed chromedp panic in fetchEnable test by injecting chromedpRunner.
+- Addressed several subscription lifecycle event handling edge cases, including stale events and metadata resolution errors.
+- Corrected fallback logic for subscription price ID resolution from nested item structures.
+
+### Testing 🧪
+- Achieved 100% test coverage for proxy, SOCKS5 forwarder, and auth in jseval tests.
+- Added extensive unit and integration tests for billing providers, webhook processors, and subscription state repository.
+- Included tests covering error scenarios such as repository unavailability and customer email resolution failures.
+
+### Docs 📚
+- Added documentation stubs for the new billing package components and billing JSON handling.
+
 ## [v0.5.2] - 2026-03-23
 
 ### Features ✨
