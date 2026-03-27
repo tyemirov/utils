@@ -1238,6 +1238,43 @@ func TestPaddleWebhookGrantResolverResolveUserEmailError(t *testing.T) {
 	require.ErrorIs(t, err, ErrWebhookGrantMetadataInvalid)
 }
 
+func TestPaddleWebhookGrantResolverNormalizesUserEmailToLowercase(t *testing.T) {
+	resolver := &paddleWebhookGrantResolver{
+		planCreditsByCode:     map[string]int64{"pro": 1000},
+		packCreditsByCode:     map[string]int64{},
+		planGrantByPriceID:    map[string]paddleGrantDefinition{"pri_pro": {Code: PlanCodePro, Credits: 1000}},
+		packGrantByPriceID:    map[string]paddleGrantDefinition{},
+		customerEmailResolver: nil,
+		eventStatusProvider:   &paddleGrantTestCheckoutEventStatusProvider{status: CheckoutEventStatusSucceeded},
+	}
+
+	payload, _ := json.Marshal(paddleTransactionCompletedWebhookPayload{
+		Data: paddleTransactionCompletedWebhookData{
+			ID:     "txn_email_case",
+			Status: "completed",
+			Customer: paddleTransactionCompletedCustomer{
+				Email: " USER@EXAMPLE.COM ",
+			},
+			CustomData: map[string]interface{}{
+				paddleMetadataPurchaseKindKey: paddlePurchaseKindSubscription,
+				paddleMetadataPlanCodeKey:     PlanCodePro,
+			},
+			Items: []paddleTransactionCompletedLineItem{
+				{Price: paddleTransactionCompletedLineItemPrice{ID: "pri_pro"}},
+			},
+		},
+	})
+	grant, shouldGrant, err := resolver.Resolve(context.Background(), WebhookEvent{
+		ProviderCode: ProviderCodePaddle,
+		EventID:      "evt_email_case",
+		EventType:    "transaction.completed",
+		Payload:      payload,
+	})
+	require.NoError(t, err)
+	require.True(t, shouldGrant)
+	require.Equal(t, "user@example.com", grant.UserEmail)
+}
+
 func TestPaddleWebhookGrantResolverResolvePendingNonGrantableStatus(t *testing.T) {
 	resolver := &paddleWebhookGrantResolver{
 		planCreditsByCode:     map[string]int64{"pro": 1000},

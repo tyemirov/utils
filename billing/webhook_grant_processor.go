@@ -407,11 +407,11 @@ func (resolver *paddleWebhookGrantResolver) resolveUserEmail(
 	ctx context.Context,
 	payload paddleTransactionCompletedWebhookData,
 ) (string, error) {
-	userEmail := webhookMetadataValue(payload.CustomData, paddleMetadataUserEmailKey)
+	userEmail := strings.ToLower(webhookMetadataValue(payload.CustomData, paddleMetadataUserEmailKey))
 	if userEmail != "" {
 		return userEmail, nil
 	}
-	userEmail = resolvePaddleCustomerEmail(payload.Customer)
+	userEmail = strings.ToLower(resolvePaddleCustomerEmail(payload.Customer))
 	if userEmail != "" {
 		return userEmail, nil
 	}
@@ -426,7 +426,7 @@ func (resolver *paddleWebhookGrantResolver) resolveUserEmail(
 	if customerEmailErr != nil {
 		return "", ErrWebhookGrantMetadataInvalid
 	}
-	return strings.TrimSpace(resolvedCustomerEmail), nil
+	return strings.ToLower(strings.TrimSpace(resolvedCustomerEmail)), nil
 }
 
 func resolvePaddleCustomerEmail(customer paddleTransactionCompletedCustomer) string {

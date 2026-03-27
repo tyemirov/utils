@@ -137,9 +137,9 @@ func waitForHTTPRetry(
 	retryDelay, hasRetryDelay := parseHTTPRetryAfter(retryAfterHeader, time.Now().UTC())
 	if !hasRetryDelay {
 		retryDelay = retryConfig.BaseDelay * time.Duration(1<<attemptIndex)
-		if retryDelay > retryConfig.MaxDelay {
-			retryDelay = retryConfig.MaxDelay
-		}
+	}
+	if retryDelay > retryConfig.MaxDelay {
+		retryDelay = retryConfig.MaxDelay
 	}
 	if retryDelay < 0 {
 		retryDelay = 0

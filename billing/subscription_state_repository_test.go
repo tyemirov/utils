@@ -133,6 +133,51 @@ func TestSubscriptionStateRepositoryGetBySubscriptionIDReturnsNotFound(t *testin
 	require.Equal(t, SubscriptionState{}, state)
 }
 
+func TestSubscriptionStateRepositoryUpsertRejectsStaleEvent(t *testing.T) {
+	database := newBillingSubscriptionStateTestDatabase(t)
+	testContext := context.Background()
+	require.NoError(t, Migrate(testContext, database))
+
+	repository := NewSubscriptionStateRepository(database)
+
+	newerTime := time.Date(2026, 3, 27, 12, 0, 0, 0, time.UTC)
+	olderTime := time.Date(2026, 3, 27, 11, 0, 0, 0, time.UTC)
+
+	require.NoError(t, repository.Upsert(testContext, SubscriptionStateUpsertInput{
+		ProviderCode:        ProviderCodePaddle,
+		UserEmail:           "user@example.com",
+		Status:              subscriptionStatusActive,
+		ProviderStatus:      "active",
+		ActivePlan:          PlanCodePro,
+		SubscriptionID:      "sub_001",
+		LastEventID:         "evt_newer",
+		LastEventType:       "subscription.activated",
+		EventOccurredAt: newerTime,
+		LastTransactionID:   "txn_newer",
+	}))
+
+	require.NoError(t, repository.Upsert(testContext, SubscriptionStateUpsertInput{
+		ProviderCode:        ProviderCodePaddle,
+		UserEmail:           "user@example.com",
+		Status:              subscriptionStatusInactive,
+		ProviderStatus:      "canceled",
+		ActivePlan:          "",
+		SubscriptionID:      "sub_001",
+		LastEventID:         "evt_older",
+		LastEventType:       "subscription.canceled",
+		EventOccurredAt: olderTime,
+		LastTransactionID:   "txn_older",
+	}))
+
+	state, found, stateErr := repository.Get(testContext, ProviderCodePaddle, "user@example.com")
+	require.NoError(t, stateErr)
+	require.True(t, found)
+	require.Equal(t, subscriptionStatusActive, state.Status)
+	require.Equal(t, "active", state.ProviderStatus)
+	require.Equal(t, PlanCodePro, state.ActivePlan)
+	require.Equal(t, "evt_newer", state.LastEventID)
+}
+
 func newBillingSubscriptionStateTestDatabase(testingContext *testing.T) *gorm.DB {
 	testingContext.Helper()
 

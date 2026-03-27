@@ -97,7 +97,7 @@ func TestResolveHTTPErrorDescriptorResolvesProviderSpecificErrors(t *testing.T) 
 	require.Equal(t, http.StatusBadGateway, httpErrorDescriptor.StatusCode)
 	require.Equal(
 		t,
-		"Paddle checkout is not configured: set a Default payment link in Paddle Checkout settings.",
+		"checkout_not_configured",
 		httpErrorDescriptor.Message,
 	)
 
@@ -108,7 +108,7 @@ func TestResolveHTTPErrorDescriptorResolvesProviderSpecificErrors(t *testing.T) 
 	require.Equal(t, http.StatusBadGateway, httpErrorDescriptor.StatusCode)
 	require.Equal(
 		t,
-		"Paddle price configuration mismatch: configured price IDs were not found for the current Paddle environment.",
+		"price_configuration_error",
 		httpErrorDescriptor.Message,
 	)
 

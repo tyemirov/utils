@@ -177,7 +177,7 @@ func (processor *subscriptionStatusWebhookProcessor) processTransactionEvent(
 				nextBillingAt = resolvePaddleSubscriptionNextBillingAt(subscriptionData)
 			}
 		} else if !errors.Is(subscriptionErr, ErrPaddleAPISubscriptionNotFound) {
-			nextBillingAt = time.Time{}
+			return fmt.Errorf("billing.subscription_status.get_subscription: %w", subscriptionErr)
 		}
 	}
 	if subscriptionStatus != subscriptionStatusActive {

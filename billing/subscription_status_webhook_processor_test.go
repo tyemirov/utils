@@ -336,12 +336,10 @@ func TestSubscriptionStatusWebhookProcessorContinuesWhenSubscriptionLookupFails(
 		Payload:      eventPayload,
 	})
 
-	require.NoError(t, processErr)
+	require.Error(t, processErr)
+	require.Contains(t, processErr.Error(), "billing.subscription_status.get_subscription")
 	require.Equal(t, "sub_test", commerceClient.receivedSubscriptionID)
-	require.Len(t, stateRepository.inputs, 1)
-	require.Equal(t, subscriptionStatusActive, stateRepository.inputs[0].Status)
-	require.Equal(t, paddleSubscriptionStatusActive, stateRepository.inputs[0].ProviderStatus)
-	require.Equal(t, PlanCodePro, stateRepository.inputs[0].ActivePlan)
+	require.Empty(t, stateRepository.inputs)
 }
 
 func TestSubscriptionStatusWebhookProcessorResolvesLifecycleUserFromSubscriptionState(t *testing.T) {
@@ -988,7 +986,8 @@ func TestProcessTransactionEventSubscriptionResolverError(t *testing.T) {
 		OccurredAt:   time.Date(2026, time.March, 15, 10, 0, 0, 0, time.UTC),
 		Payload:      eventPayload,
 	})
-	require.NoError(t, err)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "billing.subscription_status.get_subscription")
 }
 
 func TestProcessTransactionEventSubscriptionNotFound(t *testing.T) {
@@ -1475,8 +1474,8 @@ func TestProcessTransactionEventSubscriptionResolverNonNotFoundError(t *testing.
 		OccurredAt:   time.Date(2026, time.March, 15, 10, 0, 0, 0, time.UTC),
 		Payload:      eventPayload,
 	})
-	require.NoError(t, err)
-	require.Len(t, stateRepo.inputs, 1)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "billing.subscription_status.get_subscription")
 }
 
 func TestResolvePaddleSubscriptionPriceIDFromPriceObject(t *testing.T) {
@@ -1784,6 +1783,6 @@ func TestProcessTransactionEventSubscriptionResolverTransientError(t *testing.T)
 		OccurredAt:   time.Date(2026, time.March, 15, 10, 30, 0, 0, time.UTC),
 		Payload:      payload,
 	})
-	require.NoError(t, err)
-	require.Len(t, stateRepo.inputs, 1)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "billing.subscription_status.get_subscription")
 }

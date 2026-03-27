@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -109,10 +110,10 @@ func TestStripeAPIClientListSubscriptionsSendsExpectedRequest(t *testing.T) {
 }
 
 func TestStripeAPIClientGetPriceRetriesRateLimitedResponse(t *testing.T) {
-	requestCount := 0
+	var requestCount atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(responseWriter http.ResponseWriter, request *http.Request) {
-		requestCount += 1
-		if requestCount == 1 {
+		requestCount.Add(1)
+		if requestCount.Load() == 1 {
 			responseWriter.Header().Set(stripeHeaderRetryAfter, "0")
 			responseWriter.WriteHeader(http.StatusTooManyRequests)
 			_, writeErr := responseWriter.Write([]byte(`{"error":{"code":"rate_limit","message":"Too many requests"}}`))
@@ -132,7 +133,7 @@ func TestStripeAPIClientGetPriceRetriesRateLimitedResponse(t *testing.T) {
 	require.NoError(t, getPriceErr)
 	require.Equal(t, "price_pro", priceResponse.ID)
 	require.EqualValues(t, 2700, priceResponse.UnitAmount)
-	require.Equal(t, 2, requestCount)
+	require.EqualValues(t, 2, requestCount.Load())
 }
 
 func TestStripeAPIClientGetPriceRateLimitedRetryWaitDeadlineIsTransient(t *testing.T) {
@@ -159,9 +160,9 @@ func TestStripeAPIClientGetPriceRateLimitedRetryWaitDeadlineIsTransient(t *testi
 }
 
 func TestStripeAPIClientCreateCheckoutSessionDoesNotRetryRateLimitedResponse(t *testing.T) {
-	requestCount := 0
+	var requestCount atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(responseWriter http.ResponseWriter, request *http.Request) {
-		requestCount += 1
+		requestCount.Add(1)
 		require.Equal(t, http.MethodPost, request.Method)
 		responseWriter.Header().Set(stripeHeaderRetryAfter, "0")
 		responseWriter.WriteHeader(http.StatusTooManyRequests)
@@ -187,7 +188,7 @@ func TestStripeAPIClientCreateCheckoutSessionDoesNotRetryRateLimitedResponse(t *
 	require.Error(t, checkoutErr)
 	require.ErrorIs(t, checkoutErr, ErrStripeAPITransient)
 	require.ErrorIs(t, checkoutErr, ErrStripeAPIRateLimited)
-	require.Equal(t, 1, requestCount)
+	require.EqualValues(t, 1, requestCount.Load())
 }
 
 func TestStripeAPIClientResolveCustomerIDFindsExisting(t *testing.T) {
@@ -209,10 +210,10 @@ func TestStripeAPIClientResolveCustomerIDFindsExisting(t *testing.T) {
 }
 
 func TestStripeAPIClientResolveCustomerIDCreatesNew(t *testing.T) {
-	requestCount := 0
+	var requestCount atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(responseWriter http.ResponseWriter, request *http.Request) {
-		requestCount++
-		if requestCount == 1 {
+		requestCount.Add(1)
+		if requestCount.Load() == 1 {
 			require.Equal(t, http.MethodGet, request.Method)
 			_, writeErr := responseWriter.Write([]byte(`{"data":[]}`))
 			require.NoError(t, writeErr)
@@ -232,7 +233,7 @@ func TestStripeAPIClientResolveCustomerIDCreatesNew(t *testing.T) {
 	customerID, err := apiClient.ResolveCustomerID(context.Background(), "user@example.com")
 	require.NoError(t, err)
 	require.Equal(t, "cus_new_123", customerID)
-	require.Equal(t, 2, requestCount)
+	require.EqualValues(t, 2, requestCount.Load())
 }
 
 func TestStripeAPIClientResolveCustomerIDFindErrors(t *testing.T) {
@@ -430,10 +431,10 @@ func TestParseStripeMetadataInt64NegativeValue(t *testing.T) {
 }
 
 func TestStripeAPIClientListSubscriptionsPaginates(t *testing.T) {
-	requestCount := 0
+	var requestCount atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(responseWriter http.ResponseWriter, request *http.Request) {
-		requestCount++
-		if requestCount == 1 {
+		requestCount.Add(1)
+		if requestCount.Load() == 1 {
 			_, writeErr := responseWriter.Write([]byte(`{"data":[{"id":"sub_1","status":"active","customer":"cus_1","created":1761023491}],"has_more":true}`))
 			require.NoError(t, writeErr)
 			return
@@ -453,7 +454,7 @@ func TestStripeAPIClientListSubscriptionsPaginates(t *testing.T) {
 	require.Len(t, subscriptions, 2)
 	require.Equal(t, "sub_1", subscriptions[0].ID)
 	require.Equal(t, "sub_2", subscriptions[1].ID)
-	require.Equal(t, 2, requestCount)
+	require.EqualValues(t, 2, requestCount.Load())
 }
 
 func TestStripeAPIClientListSubscriptionsEmptyCustomer(t *testing.T) {

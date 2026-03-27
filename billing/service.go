@@ -383,7 +383,7 @@ func (service *Service) ReconcileCheckout(
 	}
 	normalizedCheckoutUserEmail := strings.ToLower(strings.TrimSpace(checkoutUserEmail))
 	if normalizedCheckoutUserEmail != normalizedUserEmail {
-		return fmt.Errorf("%w: %s", ErrBillingCheckoutOwnershipMismatch, normalizedTransactionID)
+		return fmt.Errorf("%w", ErrBillingCheckoutOwnershipMismatch)
 	}
 	if isCheckoutReconcileEventPending(service.provider, webhookEvent.EventType) {
 		return ErrBillingCheckoutTransactionPending

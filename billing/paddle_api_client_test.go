@@ -178,7 +178,7 @@ func TestPaddleAPIClientListCustomerTransactionsIncludesCustomerFilter(t *testin
 }
 
 func TestPaddleAPIClientListCustomerTransactionsIncludesAllPages(t *testing.T) {
-	requestCount := 0
+	var requestCount atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(responseWriter http.ResponseWriter, request *http.Request) {
 		require.Equal(t, "/transactions", request.URL.Path)
 		require.Equal(t, "ctm_123", request.URL.Query().Get("customer_id"))
@@ -187,12 +187,12 @@ func TestPaddleAPIClientListCustomerTransactionsIncludesAllPages(t *testing.T) {
 		responseWriter.Header().Set(paddleHeaderContentType, paddleContentTypeApplicationJSON)
 		if afterCursor == "" {
 			_, _ = responseWriter.Write([]byte(`{"data":[{"id":"txn_001","status":"completed"}],"meta":{"pagination":{"next":"https://api.paddle.com/transactions?customer_id=ctm_123&per_page=100&after=txn_001","has_more":true}}}`))
-			requestCount += 1
+			requestCount.Add(1)
 			return
 		}
 		require.Equal(t, "txn_001", afterCursor)
 		_, _ = responseWriter.Write([]byte(`{"data":[{"id":"txn_002","status":"completed"}],"meta":{"pagination":{"next":"","has_more":false}}}`))
-		requestCount += 1
+		requestCount.Add(1)
 	}))
 	defer server.Close()
 
@@ -207,7 +207,7 @@ func TestPaddleAPIClientListCustomerTransactionsIncludesAllPages(t *testing.T) {
 	require.Len(t, transactions, 2)
 	require.Equal(t, "txn_001", transactions[0].ID)
 	require.Equal(t, "txn_002", transactions[1].ID)
-	require.Equal(t, 2, requestCount)
+	require.EqualValues(t, 2, requestCount.Load())
 }
 
 func TestPaddleAPIClientListCustomerTransactionsRejectsInvalidPaginationNextPath(t *testing.T) {
@@ -251,7 +251,7 @@ func TestPaddleAPIClientListCustomerSubscriptionsIncludesCustomerFilter(t *testi
 }
 
 func TestPaddleAPIClientListCustomerSubscriptionsIncludesAllPages(t *testing.T) {
-	requestCount := 0
+	var requestCount atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(responseWriter http.ResponseWriter, request *http.Request) {
 		require.Equal(t, "/subscriptions", request.URL.Path)
 		require.Equal(t, "ctm_123", request.URL.Query().Get("customer_id"))
@@ -260,12 +260,12 @@ func TestPaddleAPIClientListCustomerSubscriptionsIncludesAllPages(t *testing.T) 
 		responseWriter.Header().Set(paddleHeaderContentType, paddleContentTypeApplicationJSON)
 		if afterCursor == "" {
 			_, _ = responseWriter.Write([]byte(`{"data":[{"id":"sub_001","status":"active"}],"meta":{"pagination":{"next":"https://api.paddle.com/subscriptions?customer_id=ctm_123&per_page=100&after=sub_001","has_more":true}}}`))
-			requestCount += 1
+			requestCount.Add(1)
 			return
 		}
 		require.Equal(t, "sub_001", afterCursor)
 		_, _ = responseWriter.Write([]byte(`{"data":[{"id":"sub_002","status":"canceled"}],"meta":{"pagination":{"next":"","has_more":false}}}`))
-		requestCount += 1
+		requestCount.Add(1)
 	}))
 	defer server.Close()
 
@@ -280,13 +280,13 @@ func TestPaddleAPIClientListCustomerSubscriptionsIncludesAllPages(t *testing.T) 
 	require.Len(t, subscriptions, 2)
 	require.Equal(t, "sub_001", subscriptions[0].ID)
 	require.Equal(t, "sub_002", subscriptions[1].ID)
-	require.Equal(t, 2, requestCount)
+	require.EqualValues(t, 2, requestCount.Load())
 }
 
 func TestPaddleAPIClientListCustomerTransactionsIgnoresNextPathWhenHasMoreIsFalse(t *testing.T) {
-	requestCount := 0
+	var requestCount atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(responseWriter http.ResponseWriter, request *http.Request) {
-		requestCount += 1
+		requestCount.Add(1)
 		require.Equal(t, "/transactions", request.URL.Path)
 		responseWriter.Header().Set(paddleHeaderContentType, paddleContentTypeApplicationJSON)
 		_, _ = responseWriter.Write([]byte(`{"data":[{"id":"txn_001","status":"completed"}],"meta":{"pagination":{"next":"https://api.paddle.com/transactions?customer_id=ctm_123&per_page=100&after=txn_001","has_more":false}}}`))
@@ -303,7 +303,7 @@ func TestPaddleAPIClientListCustomerTransactionsIgnoresNextPathWhenHasMoreIsFals
 	require.NoError(t, err)
 	require.Len(t, transactions, 1)
 	require.Equal(t, "txn_001", transactions[0].ID)
-	require.Equal(t, 1, requestCount)
+	require.EqualValues(t, 1, requestCount.Load())
 }
 
 func TestPaddleAPIClientListCustomerTransactionsRejectsEmptyCustomerID(t *testing.T) {
@@ -329,10 +329,10 @@ func TestPaddleAPIClientListCustomerSubscriptionsRejectsEmptyCustomerID(t *testi
 }
 
 func TestPaddleAPIClientGetPriceRetriesRateLimitedResponse(t *testing.T) {
-	requestCount := 0
+	var requestCount atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(responseWriter http.ResponseWriter, request *http.Request) {
-		requestCount += 1
-		if requestCount == 1 {
+		requestCount.Add(1)
+		if requestCount.Load() == 1 {
 			responseWriter.Header().Set(paddleHeaderContentType, paddleContentTypeApplicationJSON)
 			responseWriter.Header().Set(paddleHeaderRetryAfter, "0")
 			responseWriter.WriteHeader(http.StatusTooManyRequests)
@@ -356,7 +356,7 @@ func TestPaddleAPIClientGetPriceRetriesRateLimitedResponse(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "pri_test", priceDetails.ID)
 	require.EqualValues(t, 2700, priceDetails.PriceCents)
-	require.Equal(t, 2, requestCount)
+	require.EqualValues(t, 2, requestCount.Load())
 }
 
 func TestPaddleAPIClientGetPriceRateLimitedRetryWaitDeadlineIsTransient(t *testing.T) {
@@ -417,9 +417,9 @@ func TestPaddleAPIClientListPricesUsesIDFilter(t *testing.T) {
 }
 
 func TestPaddleAPIClientGetPriceFailsAfterRateLimitRetryExhausted(t *testing.T) {
-	requestCount := 0
+	var requestCount atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(responseWriter http.ResponseWriter, request *http.Request) {
-		requestCount += 1
+		requestCount.Add(1)
 		responseWriter.Header().Set(paddleHeaderContentType, paddleContentTypeApplicationJSON)
 		responseWriter.Header().Set(paddleHeaderRetryAfter, "0")
 		responseWriter.WriteHeader(http.StatusTooManyRequests)
@@ -437,13 +437,13 @@ func TestPaddleAPIClientGetPriceFailsAfterRateLimitRetryExhausted(t *testing.T) 
 	require.Error(t, err)
 	require.ErrorIs(t, err, ErrPaddleAPIRequestFailed)
 	require.Contains(t, err.Error(), "too_many_requests")
-	require.Equal(t, paddleAPIRequestMaxAttempts, requestCount)
+	require.EqualValues(t, paddleAPIRequestMaxAttempts, requestCount.Load())
 }
 
 func TestPaddleAPIClientCreateTransactionDoesNotRetryRateLimitedResponse(t *testing.T) {
-	requestCount := 0
+	var requestCount atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(responseWriter http.ResponseWriter, request *http.Request) {
-		requestCount += 1
+		requestCount.Add(1)
 		require.Equal(t, http.MethodPost, request.Method)
 		responseWriter.Header().Set(paddleHeaderContentType, paddleContentTypeApplicationJSON)
 		responseWriter.WriteHeader(http.StatusTooManyRequests)
@@ -467,7 +467,7 @@ func TestPaddleAPIClientCreateTransactionDoesNotRetryRateLimitedResponse(t *test
 	require.Error(t, err)
 	require.ErrorIs(t, err, ErrPaddleAPITransient)
 	require.ErrorIs(t, err, ErrPaddleAPIRateLimited)
-	require.Equal(t, 1, requestCount)
+	require.EqualValues(t, 1, requestCount.Load())
 }
 
 func TestPaddleAPIClientResolveCustomerIDFindsExisting(t *testing.T) {
@@ -493,9 +493,9 @@ func TestPaddleAPIClientResolveCustomerIDFindsExisting(t *testing.T) {
 }
 
 func TestPaddleAPIClientResolveCustomerIDCreatesNew(t *testing.T) {
-	requestCount := 0
+	var requestCount atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(responseWriter http.ResponseWriter, request *http.Request) {
-		requestCount++
+		requestCount.Add(1)
 		responseWriter.Header().Set(paddleHeaderContentType, paddleContentTypeApplicationJSON)
 		if request.URL.Path == "/customers" && request.Method == http.MethodGet {
 			_, _ = responseWriter.Write([]byte(`{"data":[]}`))
@@ -1178,9 +1178,9 @@ func TestPaddleAPIClientListPricesResolvePriceError(t *testing.T) {
 }
 
 func TestPaddleAPIClientListCustomerTransactionsDuplicatePage(t *testing.T) {
-	requestCount := 0
+	var requestCount atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(responseWriter http.ResponseWriter, request *http.Request) {
-		requestCount++
+		requestCount.Add(1)
 		responseWriter.Header().Set(paddleHeaderContentType, paddleContentTypeApplicationJSON)
 		// Always return the same next page to trigger duplicate detection
 		_, _ = responseWriter.Write([]byte(`{"data":[{"id":"txn_001","status":"completed"}],"meta":{"pagination":{"next":"/transactions?customer_id=ctm_123&per_page=100","has_more":true}}}`))

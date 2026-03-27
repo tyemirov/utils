@@ -17,8 +17,8 @@ const (
 	billingHTTPMessageTransactionPending      = "transaction_pending"
 	billingHTTPMessageTransactionUserMismatch = "transaction_user_mismatch"
 	billingHTTPMessageUserSyncFailed          = "billing_user_sync_failed"
-	billingHTTPMessageCheckoutNotConfigured   = "Paddle checkout is not configured: set a Default payment link in Paddle Checkout settings."
-	billingHTTPMessagePriceNotFound           = "Paddle price configuration mismatch: configured price IDs were not found for the current Paddle environment."
+	billingHTTPMessageCheckoutNotConfigured   = "checkout_not_configured"
+	billingHTTPMessagePriceNotFound           = "price_configuration_error"
 )
 
 type HTTPErrorDescriptor struct {

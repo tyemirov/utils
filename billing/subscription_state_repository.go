@@ -155,6 +155,15 @@ func (repository *subscriptionStateRepository) Upsert(
 				{Name: "provider_code"},
 				{Name: "user_email"},
 			},
+			Where: clause.Where{
+				Exprs: []clause.Expression{
+					clause.Or(
+						clause.Expr{SQL: "last_event_occurred_at IS NULL"},
+						clause.Expr{SQL: "? IS NULL", Vars: []interface{}{stateRecord.LastEventOccurredAt}},
+						clause.Expr{SQL: "? >= last_event_occurred_at", Vars: []interface{}{stateRecord.LastEventOccurredAt}},
+					),
+				},
+			},
 			DoUpdates: clause.Assignments(map[string]interface{}{
 				"status":                 stateRecord.Status,
 				"provider_status":        stateRecord.ProviderStatus,

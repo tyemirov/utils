@@ -240,6 +240,18 @@ func TestWaitForHTTPRetryWithRetryAfterHeader(t *testing.T) {
 	require.Less(t, elapsed, 50*time.Millisecond)
 }
 
+func TestWaitForHTTPRetryRetryAfterClampsToMaxDelay(t *testing.T) {
+	start := time.Now()
+	err := waitForHTTPRetry(context.Background(), "9999", 0, httpRetryConfig{
+		MaxAttempts: 4,
+		BaseDelay:   time.Millisecond,
+		MaxDelay:    5 * time.Millisecond,
+	})
+	elapsed := time.Since(start)
+	require.NoError(t, err)
+	require.Less(t, elapsed, 50*time.Millisecond)
+}
+
 func TestWaitForHTTPRetryNegativeDelay(t *testing.T) {
 	// Use a date far in the past to get a negative retry delay
 	pastDate := time.Now().Add(-10 * time.Minute).UTC().Format(http.TimeFormat)
