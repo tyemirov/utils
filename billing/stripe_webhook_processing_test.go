@@ -2487,7 +2487,7 @@ func TestStripeProcessCheckoutPlanCodeFallbackFromGrantReason(t *testing.T) {
 		},
 		customerEmailResolver: nil,
 		planCodeByPriceID:     map[string]string{},
-		eventStatusProvider:    testEventStatusProvider(),
+		eventStatusProvider:   testEventStatusProvider(),
 	}
 	err := processor.processCheckoutSessionCompletedEvent(context.Background(), WebhookEvent{
 		ProviderCode: ProviderCodeStripe,
@@ -2534,7 +2534,7 @@ func TestStripeProcessCheckoutPlanCodeFallbackFromExistingStateDirect(t *testing
 		},
 		customerEmailResolver: nil,
 		planCodeByPriceID:     map[string]string{},
-		eventStatusProvider:    testEventStatusProvider(),
+		eventStatusProvider:   testEventStatusProvider(),
 	}
 	err := processor.processCheckoutSessionCompletedEvent(context.Background(), WebhookEvent{
 		ProviderCode: ProviderCodeStripe,

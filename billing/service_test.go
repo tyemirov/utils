@@ -1144,7 +1144,7 @@ type simpleCommerceProviderNoReconcile struct {
 	code string
 }
 
-func (p *simpleCommerceProviderNoReconcile) Code() string                { return p.code }
+func (p *simpleCommerceProviderNoReconcile) Code() string { return p.code }
 func (p *simpleCommerceProviderNoReconcile) SubscriptionPlans() []SubscriptionPlan {
 	return nil
 }

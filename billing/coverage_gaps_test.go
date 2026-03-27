@@ -383,8 +383,8 @@ func TestPaddleWebhookGrantResolverResolvePlanCreditsFromPriceCatalogFallback(t 
 	// initially false. planGrantByPriceID has an entry for "pri_special" whose
 	// Code == "special_pro", so lines 311-314 run and set hasPlanCredits = true.
 	resolver := &paddleWebhookGrantResolver{
-		planCreditsByCode:  map[string]int64{},
-		packCreditsByCode:  map[string]int64{},
+		planCreditsByCode: map[string]int64{},
+		packCreditsByCode: map[string]int64{},
 		planGrantByPriceID: map[string]paddleGrantDefinition{
 			"pri_special": {Code: "special_pro", Credits: 750},
 		},
@@ -502,8 +502,8 @@ func TestPaddleWebhookGrantResolverResolveUnknownPriceIDReturnsMetadataInvalid(t
 // resolveUserEmail directly).
 func TestPaddleWebhookGrantResolverResolveNilEmailResolverWithCustomerID(t *testing.T) {
 	resolver := &paddleWebhookGrantResolver{
-		planCreditsByCode:  map[string]int64{PlanCodePro: 1000},
-		packCreditsByCode:  map[string]int64{},
+		planCreditsByCode: map[string]int64{PlanCodePro: 1000},
+		packCreditsByCode: map[string]int64{},
 		planGrantByPriceID: map[string]paddleGrantDefinition{
 			"pri_pro": {Code: PlanCodePro, Credits: 1000},
 		},

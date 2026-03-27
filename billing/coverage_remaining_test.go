@@ -322,7 +322,7 @@ func TestStripeWebhookGrantResolverPackCodeFromPriceCatalogFallback(t *testing.T
 			"price_special_pack": {Code: "", Credits: 777},
 		},
 		customerEmailResolver: nil,
-		eventStatusProvider:    testEventStatusProvider(),
+		eventStatusProvider:   testEventStatusProvider(),
 	}
 
 	session := stripeCheckoutSessionWebhookData{

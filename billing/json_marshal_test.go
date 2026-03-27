@@ -174,7 +174,7 @@ func TestStripeBuildInactiveSyncEventMarshalErrorCustomerNotFound(t *testing.T) 
 	defer func() { jsonMarshalFunc = original }()
 
 	commerceClient := &stubStripeCommerceClient{
-		foundCustomerID:  "cus_1",
+		foundCustomerID:      "cus_1",
 		listSubscriptionsErr: ErrStripeAPICustomerNotFound,
 	}
 	provider, providerErr := NewStripeProvider(

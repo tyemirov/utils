@@ -1594,8 +1594,8 @@ func TestDoJSONRequestMarshalError(t *testing.T) {
 func TestDoJSONRequestNewRequestError(t *testing.T) {
 	// A URL with a null byte causes http.NewRequestWithContext to return an error.
 	client := &paddleAPIClient{
-		baseURL: "http://bad\x00host.example.com",
-		apiKey:  "test_key",
+		baseURL:    "http://bad\x00host.example.com",
+		apiKey:     "test_key",
 		httpClient: &http.Client{},
 	}
 

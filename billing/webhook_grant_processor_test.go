@@ -1113,7 +1113,7 @@ func TestPaddleWebhookGrantResolverResolveTopUpPackFromPriceIDWithCodeFallback(t
 			"pri_special": {Code: "special_pack", Credits: 999},
 		},
 		customerEmailResolver: nil,
-		eventStatusProvider:    &paddleGrantTestCheckoutEventStatusProvider{status: CheckoutEventStatusSucceeded},
+		eventStatusProvider:   &paddleGrantTestCheckoutEventStatusProvider{status: CheckoutEventStatusSucceeded},
 	}
 
 	payload, _ := json.Marshal(paddleTransactionCompletedWebhookPayload{
