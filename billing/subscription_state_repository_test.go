@@ -144,29 +144,29 @@ func TestSubscriptionStateRepositoryUpsertRejectsStaleEvent(t *testing.T) {
 	olderTime := time.Date(2026, 3, 27, 11, 0, 0, 0, time.UTC)
 
 	require.NoError(t, repository.Upsert(testContext, SubscriptionStateUpsertInput{
-		ProviderCode:        ProviderCodePaddle,
-		UserEmail:           "user@example.com",
-		Status:              subscriptionStatusActive,
-		ProviderStatus:      "active",
-		ActivePlan:          PlanCodePro,
-		SubscriptionID:      "sub_001",
-		LastEventID:         "evt_newer",
-		LastEventType:       "subscription.activated",
-		EventOccurredAt: newerTime,
-		LastTransactionID:   "txn_newer",
+		ProviderCode:      ProviderCodePaddle,
+		UserEmail:         "user@example.com",
+		Status:            subscriptionStatusActive,
+		ProviderStatus:    "active",
+		ActivePlan:        PlanCodePro,
+		SubscriptionID:    "sub_001",
+		LastEventID:       "evt_newer",
+		LastEventType:     "subscription.activated",
+		EventOccurredAt:   newerTime,
+		LastTransactionID: "txn_newer",
 	}))
 
 	require.NoError(t, repository.Upsert(testContext, SubscriptionStateUpsertInput{
-		ProviderCode:        ProviderCodePaddle,
-		UserEmail:           "user@example.com",
-		Status:              subscriptionStatusInactive,
-		ProviderStatus:      "canceled",
-		ActivePlan:          "",
-		SubscriptionID:      "sub_001",
-		LastEventID:         "evt_older",
-		LastEventType:       "subscription.canceled",
-		EventOccurredAt: olderTime,
-		LastTransactionID:   "txn_older",
+		ProviderCode:      ProviderCodePaddle,
+		UserEmail:         "user@example.com",
+		Status:            subscriptionStatusInactive,
+		ProviderStatus:    "canceled",
+		ActivePlan:        "",
+		SubscriptionID:    "sub_001",
+		LastEventID:       "evt_older",
+		LastEventType:     "subscription.canceled",
+		EventOccurredAt:   olderTime,
+		LastTransactionID: "txn_older",
 	}))
 
 	state, found, stateErr := repository.Get(testContext, ProviderCodePaddle, "user@example.com")
@@ -189,7 +189,8 @@ func newBillingSubscriptionStateTestDatabase(testingContext *testing.T) *gorm.DB
 // Coverage gap tests for subscription_state_repository.go
 
 func TestMigrateNilContext(t *testing.T) {
-	err := Migrate(nil, nil)
+	var nilCtx context.Context
+	err := Migrate(nilCtx, nil)
 	require.ErrorIs(t, err, ErrBillingSubscriptionStateRepositoryUnavailable)
 }
 
