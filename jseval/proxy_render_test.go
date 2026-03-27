@@ -3,11 +3,14 @@ package jseval
 import (
 	"context"
 	"encoding/base64"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/chromedp/chromedp"
 )
 
 func TestRenderPage_HTTPProxyWithAuth(t *testing.T) {
@@ -149,16 +152,28 @@ func TestRenderPage_DefaultTimeout(t *testing.T) {
 }
 
 func TestRenderPage_HTTPProxyFetchEnableError(t *testing.T) {
-	// Use an already-cancelled context so that chromedp.Run for fetch.Enable fails
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
+	original := chromedpRunner
+	defer func() { chromedpRunner = original }()
 
-	_, renderError := RenderPage(ctx, "http://example.com", Config{
-		Timeout:  5 * time.Second,
+	chromedpRunner = func(ctx context.Context, actions ...chromedp.Action) error {
+		return fmt.Errorf("mock fetch enable error")
+	}
+
+	targetServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		w.Write([]byte(`<html><body>ok</body></html>`))
+	}))
+	defer targetServer.Close()
+
+	_, renderError := RenderPage(context.Background(), targetServer.URL, Config{
+		Timeout:  10 * time.Second,
 		ProxyURL: "http://user:pass@proxy.example.com:8080",
 	})
 	if renderError == nil {
-		t.Fatal("expected error when context is cancelled before fetch.Enable")
+		t.Fatal("expected error when fetch.Enable fails")
+	}
+	if !strings.Contains(renderError.Error(), "enabling fetch for proxy auth") {
+		t.Errorf("expected fetch enable error, got: %v", renderError)
 	}
 }
 

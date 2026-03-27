@@ -24,9 +24,10 @@ import (
 
 // Injected for testing error paths that are impossible to trigger normally.
 var (
-	netListen  = net.Listen
-	proxySocks = proxy.SOCKS5
-	urlParse   = url.Parse
+	netListen      = net.Listen
+	proxySocks     = proxy.SOCKS5
+	urlParse       = url.Parse
+	chromedpRunner = chromedp.Run
 )
 
 // Config controls the headless browser behaviour.
@@ -140,7 +141,7 @@ func RenderPage(ctx context.Context, targetURL string, config Config) (*Result, 
 		if proxyUsername != "" {
 			setupProxyAuth(browserCtx, proxyUsername, proxyPassword)
 
-			if fetchEnableError := chromedp.Run(browserCtx, fetch.Enable().WithHandleAuthRequests(true)); fetchEnableError != nil {
+			if fetchEnableError := chromedpRunner(browserCtx, fetch.Enable().WithHandleAuthRequests(true)); fetchEnableError != nil {
 				return nil, fmt.Errorf("jseval.RenderPage: enabling fetch for proxy auth: %w", fetchEnableError)
 			}
 		}
