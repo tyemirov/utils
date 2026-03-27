@@ -22,6 +22,13 @@ import (
 	"golang.org/x/net/proxy"
 )
 
+// Injected for testing error paths that are impossible to trigger normally.
+var (
+	netListen  = net.Listen
+	proxySocks = proxy.SOCKS5
+	urlParse   = url.Parse
+)
+
 // Config controls the headless browser behaviour.
 type Config struct {
 	// Timeout is the maximum time to wait for the page to render.
@@ -225,12 +232,12 @@ func newSOCKSForwarder(upstreamProxyURL string) (*socksForwarder, error) {
 		}
 	}
 
-	upstreamDialer, dialerError := proxy.SOCKS5("tcp", parsed.Host, auth, proxy.Direct)
+	upstreamDialer, dialerError := proxySocks("tcp", parsed.Host, auth, proxy.Direct)
 	if dialerError != nil {
 		return nil, fmt.Errorf("creating upstream SOCKS5 dialer: %w", dialerError)
 	}
 
-	listener, listenError := net.Listen("tcp", "127.0.0.1:0")
+	listener, listenError := netListen("tcp", "127.0.0.1:0")
 	if listenError != nil {
 		return nil, fmt.Errorf("listening on localhost: %w", listenError)
 	}
@@ -336,7 +343,7 @@ func (forwarder *socksForwarder) handleConnection(clientConn net.Conn) {
 
 // isSOCKSProxy returns true if the proxy URL uses a SOCKS protocol.
 func isSOCKSProxy(rawProxyURL string) bool {
-	parsed, parseError := url.Parse(rawProxyURL)
+	parsed, parseError := urlParse(rawProxyURL)
 	if parseError != nil {
 		return false
 	}
@@ -371,27 +378,37 @@ func extractProxyCredentials(rawProxyURL string) (string, string) {
 
 // setupProxyAuth configures CDP to respond to HTTP proxy authentication challenges.
 func setupProxyAuth(ctx context.Context, username string, password string) {
-	chromedp.ListenTarget(ctx, func(event interface{}) {
+	chromedp.ListenTarget(ctx, newProxyAuthEventHandler(ctx, username, password))
+}
+
+// proxyAuthRunner is the function signature for running chromedp actions.
+// Defaults to chromedp.Run; injectable for testing.
+var proxyAuthRunner = func(ctx context.Context, actions ...chromedp.Action) error {
+	return chromedp.Run(ctx, actions...)
+}
+
+// newProxyAuthEventHandler creates an event handler that responds to proxy
+// authentication challenges and paused requests.
+func newProxyAuthEventHandler(ctx context.Context, username string, password string) func(event interface{}) {
+	return func(event interface{}) {
 		if authRequired, isAuthRequired := event.(*fetch.EventAuthRequired); isAuthRequired {
 			go func() {
-				continueError := chromedp.Run(ctx,
+				_ = proxyAuthRunner(ctx,
 					fetch.ContinueWithAuth(authRequired.RequestID, &fetch.AuthChallengeResponse{
 						Response: fetch.AuthChallengeResponseResponseProvideCredentials,
 						Username: username,
 						Password: password,
 					}),
 				)
-				_ = continueError
 			}()
 		}
 
 		if requestPaused, isRequestPaused := event.(*fetch.EventRequestPaused); isRequestPaused {
 			go func() {
-				continueError := chromedp.Run(ctx, fetch.ContinueRequest(requestPaused.RequestID))
-				_ = continueError
+				_ = proxyAuthRunner(ctx, fetch.ContinueRequest(requestPaused.RequestID))
 			}()
 		}
-	})
+	}
 }
 
 // RenderPages renders multiple URLs concurrently, each in its own browser tab.
