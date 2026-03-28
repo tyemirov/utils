@@ -1,5 +1,26 @@
 # Changelog
 
+## [v0.10.0] - 2026-03-28
+
+### Features ✨
+- Introduce `browsertransport` package: reusable proxy-aware browser and HTTP transport runtime for scraping workloads with support for browser profiles, sessions, SOCKS forwarding, and one-shot rendering.
+- Add `RenderPages` helper for concurrent multi-URL rendering.
+- Add `NewHTTPClient` to build HTTP clients bound to transport profiles.
+
+### Improvements ⚙️
+- Extract shared browser transport runtime from prior evaluation code.
+- Honor caller cancellation during tab initialization to improve responsiveness.
+
+### Bug Fixes 🐛
+- Fix IPv6 SOCKS dial target formatting issue.
+
+### Testing 🧪
+- Add extensive tests for `browsertransport` package including profiles, sessions, proxy handling, SOCKS forwarder, and render helpers.
+
+### Docs 📚
+- Document browser transport architecture and usage in `ARCHITECTURE.md` and `README.md`.
+- Add explanation of browser rendering stack and transport profiles.
+
 ## [v0.9.1] - 2026-03-27
 
 ### Features ✨
