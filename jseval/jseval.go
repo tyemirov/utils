@@ -140,10 +140,6 @@ func RenderPage(ctx context.Context, targetURL string, config Config) (*Result, 
 	renderTargetCtx, cancelRenderTarget := chromedpNewContext(browserCtx)
 	defer cancelRenderTarget()
 
-	if targetInitError := chromedpRunner(renderTargetCtx); targetInitError != nil {
-		return nil, fmt.Errorf("jseval.RenderPage: initializing render target: %w", targetInitError)
-	}
-
 	renderCtx, cancelRender := context.WithTimeout(renderTargetCtx, config.Timeout)
 	defer cancelRender()
 

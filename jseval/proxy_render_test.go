@@ -155,12 +155,7 @@ func TestRenderPage_HTTPProxyFetchEnableError(t *testing.T) {
 	original := chromedpRunner
 	defer func() { chromedpRunner = original }()
 
-	runCallCount := 0
 	chromedpRunner = func(ctx context.Context, actions ...chromedp.Action) error {
-		runCallCount++
-		if runCallCount == 1 {
-			return nil
-		}
 		return fmt.Errorf("mock fetch enable error")
 	}
 
@@ -240,47 +235,13 @@ func TestRenderPage_HTTPProxyAuthUsesRenderTarget(t *testing.T) {
 	if setupContextName != "render-target" {
 		t.Fatalf("expected proxy auth on render target, got %q", setupContextName)
 	}
-	if len(runContextNames) < 4 {
-		t.Fatalf("expected render target initialization and render calls, got %d", len(runContextNames))
+	if len(runContextNames) < 3 {
+		t.Fatalf("expected render-target auth setup and render calls, got %d", len(runContextNames))
 	}
 	for runIndex, contextName := range runContextNames {
 		if contextName != "render-target" {
 			t.Fatalf("run call %d used %q, want render-target", runIndex, contextName)
 		}
-	}
-}
-
-func TestRenderPage_RenderTargetInitializationError(t *testing.T) {
-	originalRunner := chromedpRunner
-	originalNewExecAllocator := chromedpNewExecAllocator
-	originalNewContext := chromedpNewContext
-	defer func() {
-		chromedpRunner = originalRunner
-		chromedpNewExecAllocator = originalNewExecAllocator
-		chromedpNewContext = originalNewContext
-	}()
-
-	chromedpNewExecAllocator = func(parent context.Context, options ...chromedp.ExecAllocatorOption) (context.Context, context.CancelFunc) {
-		return parent, func() {}
-	}
-	chromedpNewContext = func(parent context.Context, options ...chromedp.ContextOption) (context.Context, context.CancelFunc) {
-		return parent, func() {}
-	}
-	chromedpRunner = func(ctx context.Context, actions ...chromedp.Action) error {
-		if len(actions) == 0 {
-			return fmt.Errorf("mock target init error")
-		}
-		return nil
-	}
-
-	_, renderError := RenderPage(context.Background(), "https://example.com", Config{
-		Timeout: time.Second,
-	})
-	if renderError == nil {
-		t.Fatal("expected target initialization error")
-	}
-	if !strings.Contains(renderError.Error(), "initializing render target") {
-		t.Fatalf("expected target initialization error, got %v", renderError)
 	}
 }
 
