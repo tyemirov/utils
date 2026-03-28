@@ -12,6 +12,10 @@ Each issue is formatted as `- [ ] [UT-<number>]`. When resolved it becomes `- [x
 
 ## BugFixes (300–399)
 
+- [x] [UT-304] Attach jseval HTTP proxy auth to the render target. (Create a dedicated render tab before proxy auth/fetch setup; add regression coverage for render-target binding and target initialization failures.)
+
+`jseval.RenderPage` was enabling proxy auth on the parent browser context and then rendering on a derived context. That works only as long as both operations share the same CDP target; callers that introduce a dedicated render tab can lose the auth handler and fail with proxy-auth page load errors.
+
 - [x] [UT-303] Skip dispatch when claim for attempt is lost. (Add optional claim hook in scheduler worker; skip dispatch/update when claim returns false or errors; add regression tests.)
 
 When multiple workers contend for the same pending entry, the scheduler can dispatch duplicate attempts unless the repository can atomically claim ownership before side effects run. Add a claim gate so workers skip dispatch when claim returns false.

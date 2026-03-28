@@ -155,7 +155,12 @@ func TestRenderPage_HTTPProxyFetchEnableError(t *testing.T) {
 	original := chromedpRunner
 	defer func() { chromedpRunner = original }()
 
+	runCallCount := 0
 	chromedpRunner = func(ctx context.Context, actions ...chromedp.Action) error {
+		runCallCount++
+		if runCallCount == 1 {
+			return nil
+		}
 		return fmt.Errorf("mock fetch enable error")
 	}
 
@@ -174,6 +179,108 @@ func TestRenderPage_HTTPProxyFetchEnableError(t *testing.T) {
 	}
 	if !strings.Contains(renderError.Error(), "enabling fetch for proxy auth") {
 		t.Errorf("expected fetch enable error, got: %v", renderError)
+	}
+}
+
+func TestRenderPage_HTTPProxyAuthUsesRenderTarget(t *testing.T) {
+	originalRunner := chromedpRunner
+	originalNewExecAllocator := chromedpNewExecAllocator
+	originalNewContext := chromedpNewContext
+	originalSetupProxyAuth := setupProxyAuthFn
+	defer func() {
+		chromedpRunner = originalRunner
+		chromedpNewExecAllocator = originalNewExecAllocator
+		chromedpNewContext = originalNewContext
+		setupProxyAuthFn = originalSetupProxyAuth
+	}()
+
+	type contextKey string
+
+	const nameKey contextKey = "name"
+
+	chromedpNewExecAllocator = func(parent context.Context, options ...chromedp.ExecAllocatorOption) (context.Context, context.CancelFunc) {
+		return context.WithValue(parent, nameKey, "allocator"), func() {}
+	}
+
+	newContextCallCount := 0
+	chromedpNewContext = func(parent context.Context, options ...chromedp.ContextOption) (context.Context, context.CancelFunc) {
+		newContextCallCount++
+		contextName := "browser"
+		if newContextCallCount == 2 {
+			contextName = "render-target"
+		}
+		return context.WithValue(parent, nameKey, contextName), func() {}
+	}
+
+	var setupContextName string
+	setupProxyAuthFn = func(ctx context.Context, username string, password string) {
+		setupContextName, _ = ctx.Value(nameKey).(string)
+	}
+
+	var runContextNames []string
+	chromedpRunner = func(ctx context.Context, actions ...chromedp.Action) error {
+		contextName, _ := ctx.Value(nameKey).(string)
+		runContextNames = append(runContextNames, contextName)
+		return nil
+	}
+
+	result, renderError := RenderPage(context.Background(), "https://example.com", Config{
+		Timeout:  time.Second,
+		ProxyURL: "http://user:pass@proxy.example.com:8080",
+	})
+	if renderError != nil {
+		t.Fatalf("render failed: %v", renderError)
+	}
+	if result == nil {
+		t.Fatal("expected non-nil result")
+	}
+	if newContextCallCount != 2 {
+		t.Fatalf("expected 2 chromedp contexts, got %d", newContextCallCount)
+	}
+	if setupContextName != "render-target" {
+		t.Fatalf("expected proxy auth on render target, got %q", setupContextName)
+	}
+	if len(runContextNames) < 4 {
+		t.Fatalf("expected render target initialization and render calls, got %d", len(runContextNames))
+	}
+	for runIndex, contextName := range runContextNames {
+		if contextName != "render-target" {
+			t.Fatalf("run call %d used %q, want render-target", runIndex, contextName)
+		}
+	}
+}
+
+func TestRenderPage_RenderTargetInitializationError(t *testing.T) {
+	originalRunner := chromedpRunner
+	originalNewExecAllocator := chromedpNewExecAllocator
+	originalNewContext := chromedpNewContext
+	defer func() {
+		chromedpRunner = originalRunner
+		chromedpNewExecAllocator = originalNewExecAllocator
+		chromedpNewContext = originalNewContext
+	}()
+
+	chromedpNewExecAllocator = func(parent context.Context, options ...chromedp.ExecAllocatorOption) (context.Context, context.CancelFunc) {
+		return parent, func() {}
+	}
+	chromedpNewContext = func(parent context.Context, options ...chromedp.ContextOption) (context.Context, context.CancelFunc) {
+		return parent, func() {}
+	}
+	chromedpRunner = func(ctx context.Context, actions ...chromedp.Action) error {
+		if len(actions) == 0 {
+			return fmt.Errorf("mock target init error")
+		}
+		return nil
+	}
+
+	_, renderError := RenderPage(context.Background(), "https://example.com", Config{
+		Timeout: time.Second,
+	})
+	if renderError == nil {
+		t.Fatal("expected target initialization error")
+	}
+	if !strings.Contains(renderError.Error(), "initializing render target") {
+		t.Fatalf("expected target initialization error, got %v", renderError)
 	}
 }
 
