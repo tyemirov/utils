@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"sync"
 	"testing"
 	"time"
 )
@@ -53,6 +54,25 @@ type mockDialer struct {
 
 func (dialer *mockDialer) Dial(network string, address string) (net.Conn, error) {
 	return net.Dial("tcp", dialer.targetListener.Addr().String())
+}
+
+type captureDialer struct {
+	targetListener net.Listener
+	mu             sync.Mutex
+	address        string
+}
+
+func (dialer *captureDialer) Dial(network string, address string) (net.Conn, error) {
+	dialer.mu.Lock()
+	dialer.address = address
+	dialer.mu.Unlock()
+	return net.Dial("tcp", dialer.targetListener.Addr().String())
+}
+
+func (dialer *captureDialer) Address() string {
+	dialer.mu.Lock()
+	defer dialer.mu.Unlock()
+	return dialer.address
 }
 
 type failDialer struct{}
@@ -198,10 +218,11 @@ func TestHandleConnectionIPv6Connect(t *testing.T) {
 		t.Fatalf("net.Listen() error = %v", listenError)
 	}
 
+	dialer := &captureDialer{targetListener: echoServer}
 	forwarder := &socksForwarder{
 		listener: listener,
 		addr:     listener.Addr().String(),
-		dialer:   &mockDialer{targetListener: echoServer},
+		dialer:   dialer,
 	}
 	go forwarder.acceptLoop()
 	defer forwarder.close()
@@ -236,6 +257,9 @@ func TestHandleConnectionIPv6Connect(t *testing.T) {
 	_, _ = io.ReadFull(connection, buffer)
 	if string(buffer) != string(testData) {
 		t.Fatalf("buffer = %q, want %q", buffer, testData)
+	}
+	if dialer.Address() != "[::1]:80" {
+		t.Fatalf("dial address = %q, want %q", dialer.Address(), "[::1]:80")
 	}
 }
 

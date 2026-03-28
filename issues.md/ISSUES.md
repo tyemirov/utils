@@ -12,6 +12,13 @@ Each issue is formatted as `- [ ] [UT-<number>]`. When resolved it becomes `- [x
 
 ## BugFixes (300–399)
 
+- [x] [UT-306] Build SOCKS dial targets with `net.JoinHostPort`. (Use bracket-aware host:port assembly in the SOCKS forwarder and add IPv6 dial-target regression coverage.)
+
+The forwarder assembled upstream dial targets with raw string formatting, which
+breaks IPv6 literals by producing invalid `host:port` strings like
+`2001:db8::1:443`. CONNECT requests for IPv6 destinations therefore failed even
+though the proxy handshake itself succeeded.
+
 - [x] [UT-305] Honor caller cancellation during browser tab initialization. (Move the per-call timeout and caller-cancellation bridge ahead of `chromedpRunner(tabCtx)` in `browsertransport.WithTab`; add regression coverage for a stuck tab-init path.)
 
 `WithTab` initialized the derived tab on the long-lived browser context before it installed the per-call timeout and caller-cancellation bridge. When the session parent was non-cancelable, a stuck tab init could ignore request cancellation and hang indefinitely.

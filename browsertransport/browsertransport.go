@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -796,7 +797,7 @@ func (forwarder *socksForwarder) handleConnection(clientConnection net.Conn) {
 	portBytes := make([]byte, 2)
 	_, _ = io.ReadFull(clientConnection, portBytes)
 	targetPort := int(portBytes[0])<<8 | int(portBytes[1])
-	targetAddress := fmt.Sprintf("%s:%d", targetHost, targetPort)
+	targetAddress := net.JoinHostPort(targetHost, strconv.Itoa(targetPort))
 
 	upstreamConnection, dialError := forwarder.dialer.Dial("tcp", targetAddress)
 	if dialError != nil {
