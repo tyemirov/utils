@@ -1,5 +1,25 @@
 # Changelog
 
+## [v0.9.1] - 2026-03-27
+
+### Features ✨
+- _No changes._
+
+### Improvements ⚙️
+- Attach HTTP proxy authentication to the dedicated render target context to fix proxy auth errors when using a dedicated render tab.
+- Refactor `RenderPage` to properly sequence proxy auth setup on the render context.
+
+### Bug Fixes 🐛
+- Fix proxy authentication lost due to rendering on a derived context without auth handler.
+- Add error handling for enabling fetch-based proxy auth.
+
+### Testing 🧪
+- Add regression tests to verify proxy auth setup uses the render target context.
+- Test handling of fetch enable errors in HTTP proxy auth.
+
+### Docs 📚
+- Document issue UT-304 regarding jseval proxy auth and render target binding.
+
 ## [v0.9.0] - 2026-03-27
 
 ### Features ✨
