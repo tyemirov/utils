@@ -177,6 +177,74 @@ func TestRenderPage_HTTPProxyFetchEnableError(t *testing.T) {
 	}
 }
 
+func TestRenderPage_HTTPProxyAuthUsesRenderTarget(t *testing.T) {
+	originalRunner := chromedpRunner
+	originalNewExecAllocator := chromedpNewExecAllocator
+	originalNewContext := chromedpNewContext
+	originalSetupProxyAuth := setupProxyAuthFn
+	defer func() {
+		chromedpRunner = originalRunner
+		chromedpNewExecAllocator = originalNewExecAllocator
+		chromedpNewContext = originalNewContext
+		setupProxyAuthFn = originalSetupProxyAuth
+	}()
+
+	type contextKey string
+
+	const nameKey contextKey = "name"
+
+	chromedpNewExecAllocator = func(parent context.Context, options ...chromedp.ExecAllocatorOption) (context.Context, context.CancelFunc) {
+		return context.WithValue(parent, nameKey, "allocator"), func() {}
+	}
+
+	newContextCallCount := 0
+	chromedpNewContext = func(parent context.Context, options ...chromedp.ContextOption) (context.Context, context.CancelFunc) {
+		newContextCallCount++
+		contextName := "browser"
+		if newContextCallCount == 2 {
+			contextName = "render-target"
+		}
+		return context.WithValue(parent, nameKey, contextName), func() {}
+	}
+
+	var setupContextName string
+	setupProxyAuthFn = func(ctx context.Context, username string, password string) {
+		setupContextName, _ = ctx.Value(nameKey).(string)
+	}
+
+	var runContextNames []string
+	chromedpRunner = func(ctx context.Context, actions ...chromedp.Action) error {
+		contextName, _ := ctx.Value(nameKey).(string)
+		runContextNames = append(runContextNames, contextName)
+		return nil
+	}
+
+	result, renderError := RenderPage(context.Background(), "https://example.com", Config{
+		Timeout:  time.Second,
+		ProxyURL: "http://user:pass@proxy.example.com:8080",
+	})
+	if renderError != nil {
+		t.Fatalf("render failed: %v", renderError)
+	}
+	if result == nil {
+		t.Fatal("expected non-nil result")
+	}
+	if newContextCallCount != 2 {
+		t.Fatalf("expected 2 chromedp contexts, got %d", newContextCallCount)
+	}
+	if setupContextName != "render-target" {
+		t.Fatalf("expected proxy auth on render target, got %q", setupContextName)
+	}
+	if len(runContextNames) < 3 {
+		t.Fatalf("expected render-target auth setup and render calls, got %d", len(runContextNames))
+	}
+	for runIndex, contextName := range runContextNames {
+		if contextName != "render-target" {
+			t.Fatalf("run call %d used %q, want render-target", runIndex, contextName)
+		}
+	}
+}
+
 func TestRenderPage_HTTPProxyWithoutAuth(t *testing.T) {
 	// Create a target server
 	targetServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

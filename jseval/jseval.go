@@ -24,10 +24,13 @@ import (
 
 // Injected for testing error paths that are impossible to trigger normally.
 var (
-	netListen      = net.Listen
-	proxySocks     = proxy.SOCKS5
-	urlParse       = url.Parse
-	chromedpRunner = chromedp.Run
+	netListen                = net.Listen
+	proxySocks               = proxy.SOCKS5
+	urlParse                 = url.Parse
+	chromedpRunner           = chromedp.Run
+	chromedpNewExecAllocator = chromedp.NewExecAllocator
+	chromedpNewContext       = chromedp.NewContext
+	setupProxyAuthFn         = setupProxyAuth
 )
 
 // Config controls the headless browser behaviour.
@@ -128,27 +131,21 @@ func RenderPage(ctx context.Context, targetURL string, config Config) (*Result, 
 		)
 	}
 
-	allocatorCtx, cancelAllocator := chromedp.NewExecAllocator(ctx, allocatorOptions...)
+	allocatorCtx, cancelAllocator := chromedpNewExecAllocator(ctx, allocatorOptions...)
 	defer cancelAllocator()
 
-	browserCtx, cancelBrowser := chromedp.NewContext(allocatorCtx)
+	browserCtx, cancelBrowser := chromedpNewContext(allocatorCtx)
 	defer cancelBrowser()
 
-	// Set up Fetch-based proxy auth for HTTP proxies only.
-	// SOCKS5 auth is handled by the local forwarder above.
-	if config.ProxyURL != "" && !isSOCKSProxy(config.ProxyURL) {
-		proxyUsername, proxyPassword := extractProxyCredentials(config.ProxyURL)
-		if proxyUsername != "" {
-			setupProxyAuth(browserCtx, proxyUsername, proxyPassword)
+	renderTargetCtx, cancelRenderTarget := chromedpNewContext(browserCtx)
+	defer cancelRenderTarget()
 
-			if fetchEnableError := chromedpRunner(browserCtx, fetch.Enable().WithHandleAuthRequests(true)); fetchEnableError != nil {
-				return nil, fmt.Errorf("jseval.RenderPage: enabling fetch for proxy auth: %w", fetchEnableError)
-			}
-		}
-	}
-
-	renderCtx, cancelRender := context.WithTimeout(browserCtx, config.Timeout)
+	renderCtx, cancelRender := context.WithTimeout(renderTargetCtx, config.Timeout)
 	defer cancelRender()
+
+	if proxyAuthError := enableHTTPProxyAuth(renderCtx, config.ProxyURL); proxyAuthError != nil {
+		return nil, proxyAuthError
+	}
 
 	var renderedHTML string
 	var documentTitle string
@@ -168,7 +165,7 @@ func RenderPage(ctx context.Context, targetURL string, config Config) (*Result, 
 				originalQuery(parameters)
 		);
 	`
-	chromedp.Run(renderCtx, chromedp.ActionFunc(func(ctx context.Context) error {
+	chromedpRunner(renderCtx, chromedp.ActionFunc(func(ctx context.Context) error {
 		_, addScriptErr := page.AddScriptToEvaluateOnNewDocument(stealthJS).Do(ctx)
 		return addScriptErr
 	}))
@@ -189,9 +186,8 @@ func RenderPage(ctx context.Context, targetURL string, config Config) (*Result, 
 		chromedp.Location(&finalURL),
 	)
 
-	runError := chromedp.Run(renderCtx, actions...)
+	runError := chromedpRunner(renderCtx, actions...)
 
-	// Stop the local forwarder after Chrome is done, regardless of error.
 	if localForwarder != nil {
 		localForwarder.close()
 	}
@@ -375,6 +371,24 @@ func extractProxyCredentials(rawProxyURL string) (string, string) {
 	password, _ := parsed.User.Password()
 
 	return parsed.User.Username(), password
+}
+
+func enableHTTPProxyAuth(ctx context.Context, rawProxyURL string) error {
+	if rawProxyURL == "" || isSOCKSProxy(rawProxyURL) {
+		return nil
+	}
+
+	proxyUsername, proxyPassword := extractProxyCredentials(rawProxyURL)
+	if proxyUsername == "" {
+		return nil
+	}
+
+	setupProxyAuthFn(ctx, proxyUsername, proxyPassword)
+	if fetchEnableError := chromedpRunner(ctx, fetch.Enable().WithHandleAuthRequests(true)); fetchEnableError != nil {
+		return fmt.Errorf("jseval.RenderPage: enabling fetch for proxy auth: %w", fetchEnableError)
+	}
+
+	return nil
 }
 
 // setupProxyAuth configures CDP to respond to HTTP proxy authentication challenges.
