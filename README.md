@@ -4,6 +4,23 @@ A collection of small Go helpers that can be shared between projects. The
 repository is organised by package so you can import only the utilities you
 need.
 
+## Browser Transport
+Reusable proxy-aware browser and HTTP transport helpers for scraping-heavy
+projects.
+
+- **Browser profiles** - Model direct, HTTP proxy auth, and SOCKS forwarder
+  browser transport modes.
+- **Session** - Reuse one browser per transport and open short-lived render tabs
+  on demand.
+- **RenderPage / RenderPages** - One-shot convenience helpers for JS-rendered
+  pages.
+- **NewHTTPClient** - Build an HTTP client bound to the same transport profile
+  model.
+
+## JSEval
+Compatibility wrapper around `browsertransport` for existing callers that only
+need one-shot page rendering.
+
 ## File
 Utilities that simplify common file system operations.
 
@@ -177,4 +194,3 @@ Contributions are welcome!
 ### **License**
 
 This project is licensed under the **MIT License**. See the **LICENSE** file for details.
-

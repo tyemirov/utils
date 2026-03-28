@@ -34,6 +34,13 @@ Chat marshals the request payload directly with json.Marshal even when ResponseF
 
 ## Maintenance (407–449)
 
+- [x] [UT-410] Extract a shared browser transport runtime beneath jseval. (Add `browsertransport` with transport profiles, reusable sessions, SOCKS forwarding, HTTP client helpers, and one-shot rendering; make `jseval` a compatibility wrapper with migrated coverage.)
+
+`jseval` had grown into the real browser runtime while downstream repos needed
+the underlying transport model directly. Extract the shared proxy-aware browser
+and HTTP scaffolding into a dedicated package so projects can reuse sessions and
+transport profiles without copying renderer internals.
+
 - [x] [UT-407] Add Go CI gates (fmt/vet/staticcheck/ineffassign) and fix baseline failures. (Update GitHub Actions; ignore PLAN.md; normalize -0 formatting; export pointer helpers.)
 - [x] [UT-408] Add missing ARCHITECTURE.md. (Document package layout, design principles, and tooling.)
 - [x] [UT-409] Add preflight config reporting helpers and Viper adapter for shared service tooling. (Imported preflight package from TAuth and wired Viper adapter + docs.)
