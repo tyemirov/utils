@@ -1,4 +1,4 @@
-package jseval
+package browsertransport
 
 import (
 	"context"
@@ -11,8 +11,8 @@ import (
 )
 
 func TestProxyAuthEventHandlerAuthRequired(t *testing.T) {
-	original := proxyAuthRunner
-	defer func() { proxyAuthRunner = original }()
+	originalProxyAuthRunner := proxyAuthRunner
+	defer func() { proxyAuthRunner = originalProxyAuthRunner }()
 
 	var mu sync.Mutex
 	var capturedActions []chromedp.Action
@@ -25,12 +25,8 @@ func TestProxyAuthEventHandlerAuthRequired(t *testing.T) {
 	}
 
 	handler := newProxyAuthEventHandler(context.Background(), "testuser", "testpass")
+	handler(&fetch.EventAuthRequired{RequestID: fetch.RequestID("req_123")})
 
-	handler(&fetch.EventAuthRequired{
-		RequestID: fetch.RequestID("req_123"),
-	})
-
-	// Give the goroutine time to execute
 	time.Sleep(50 * time.Millisecond)
 
 	mu.Lock()
@@ -41,8 +37,8 @@ func TestProxyAuthEventHandlerAuthRequired(t *testing.T) {
 }
 
 func TestProxyAuthEventHandlerRequestPaused(t *testing.T) {
-	original := proxyAuthRunner
-	defer func() { proxyAuthRunner = original }()
+	originalProxyAuthRunner := proxyAuthRunner
+	defer func() { proxyAuthRunner = originalProxyAuthRunner }()
 
 	var mu sync.Mutex
 	var callCount int
@@ -55,10 +51,7 @@ func TestProxyAuthEventHandlerRequestPaused(t *testing.T) {
 	}
 
 	handler := newProxyAuthEventHandler(context.Background(), "testuser", "testpass")
-
-	handler(&fetch.EventRequestPaused{
-		RequestID: fetch.RequestID("req_456"),
-	})
+	handler(&fetch.EventRequestPaused{RequestID: fetch.RequestID("req_456")})
 
 	time.Sleep(50 * time.Millisecond)
 
@@ -70,8 +63,8 @@ func TestProxyAuthEventHandlerRequestPaused(t *testing.T) {
 }
 
 func TestProxyAuthEventHandlerIgnoresUnknownEvents(t *testing.T) {
-	original := proxyAuthRunner
-	defer func() { proxyAuthRunner = original }()
+	originalProxyAuthRunner := proxyAuthRunner
+	defer func() { proxyAuthRunner = originalProxyAuthRunner }()
 
 	var callCount int
 	proxyAuthRunner = func(ctx context.Context, actions ...chromedp.Action) error {
@@ -80,8 +73,6 @@ func TestProxyAuthEventHandlerIgnoresUnknownEvents(t *testing.T) {
 	}
 
 	handler := newProxyAuthEventHandler(context.Background(), "testuser", "testpass")
-
-	// Send an unrelated event type
 	handler("unrelated event")
 
 	time.Sleep(50 * time.Millisecond)

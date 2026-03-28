@@ -12,6 +12,17 @@ Each issue is formatted as `- [ ] [UT-<number>]`. When resolved it becomes `- [x
 
 ## BugFixes (300–399)
 
+- [x] [UT-306] Build SOCKS dial targets with `net.JoinHostPort`. (Use bracket-aware host:port assembly in the SOCKS forwarder and add IPv6 dial-target regression coverage.)
+
+The forwarder assembled upstream dial targets with raw string formatting, which
+breaks IPv6 literals by producing invalid `host:port` strings like
+`2001:db8::1:443`. CONNECT requests for IPv6 destinations therefore failed even
+though the proxy handshake itself succeeded.
+
+- [x] [UT-305] Honor caller cancellation during browser tab initialization. (Move the per-call timeout and caller-cancellation bridge ahead of `chromedpRunner(tabCtx)` in `browsertransport.WithTab`; add regression coverage for a stuck tab-init path.)
+
+`WithTab` initialized the derived tab on the long-lived browser context before it installed the per-call timeout and caller-cancellation bridge. When the session parent was non-cancelable, a stuck tab init could ignore request cancellation and hang indefinitely.
+
 - [x] [UT-304] Attach jseval HTTP proxy auth to the render target. (Create a dedicated render tab before proxy auth/fetch setup; add regression coverage for render-target binding and target initialization failures.)
 
 `jseval.RenderPage` was enabling proxy auth on the parent browser context and then rendering on a derived context. That works only as long as both operations share the same CDP target; callers that introduce a dedicated render tab can lose the auth handler and fail with proxy-auth page load errors.
@@ -33,6 +44,13 @@ Unlike Client.Chat, Factory.Chat assumes the caller passes a non-nil context and
 Chat marshals the request payload directly with json.Marshal even when ResponseFormat.Schema contains malformed JSON; json.RawMessage does not validate its contents, so json.Marshal succeeds and the client proceeds to POST an invalid body, returning a transport/HTTP error instead of failing fast with an encoding error (e.g., the schema used in TestClientChatFailsWhenMarshallingRequestPayload). This lets malformed response formats slip through and results in requests the API will reject.
 
 ## Maintenance (407–449)
+
+- [x] [UT-410] Extract a shared browser transport runtime beneath jseval. (Add `browsertransport` with transport profiles, reusable sessions, SOCKS forwarding, HTTP client helpers, and one-shot rendering; make `jseval` a compatibility wrapper with migrated coverage.)
+
+`jseval` had grown into the real browser runtime while downstream repos needed
+the underlying transport model directly. Extract the shared proxy-aware browser
+and HTTP scaffolding into a dedicated package so projects can reuse sessions and
+transport profiles without copying renderer internals.
 
 - [x] [UT-407] Add Go CI gates (fmt/vet/staticcheck/ineffassign) and fix baseline failures. (Update GitHub Actions; ignore PLAN.md; normalize -0 formatting; export pointer helpers.)
 - [x] [UT-408] Add missing ARCHITECTURE.md. (Document package layout, design principles, and tooling.)
