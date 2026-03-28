@@ -288,26 +288,29 @@ func (session *Session) WithTab(ctx context.Context, tabOptions TabOptions, run 
 	tabCtx, cancelTab := chromedpNewContext(browserCtx)
 	defer cancelTab()
 
-	if tabInitError := chromedpRunner(tabCtx); tabInitError != nil {
-		return fmt.Errorf("initializing browser tab: %w", tabInitError)
-	}
-
 	timeout := tabOptions.Timeout
 	if timeout <= 0 {
 		timeout = defaultRenderTimeout
 	}
-	renderCtx, cancelRender := context.WithTimeout(tabCtx, timeout)
-	defer cancelRender()
+	tabRunCtx, cancelTabRun := context.WithTimeout(tabCtx, timeout)
+	defer cancelTabRun()
 
 	cancelDone := make(chan struct{})
 	go func() {
 		select {
 		case <-ctx.Done():
-			cancelRender()
+			cancelTabRun()
 		case <-cancelDone:
 		}
 	}()
 	defer close(cancelDone)
+
+	if tabInitError := chromedpRunner(tabRunCtx); tabInitError != nil {
+		return fmt.Errorf("initializing browser tab: %w", tabInitError)
+	}
+
+	renderCtx, cancelRender := context.WithTimeout(tabRunCtx, timeout)
+	defer cancelRender()
 
 	if proxyAuthError := enableHTTPProxyAuth(renderCtx, browserProfile); proxyAuthError != nil {
 		return proxyAuthError

@@ -194,6 +194,45 @@ func TestWithTabBranches(t *testing.T) {
 	if !runCalled {
 		t.Fatal("expected run callback")
 	}
+
+	chromedpNewContext = browserContext
+	outerCtx, cancelStuckInit := context.WithCancel(context.Background())
+	tabInitStarted := make(chan struct{}, 1)
+	runCallbackExecuted := make(chan struct{}, 1)
+	chromedpRunner = func(ctx context.Context, actions ...chromedp.Action) error {
+		select {
+		case tabInitStarted <- struct{}{}:
+		default:
+		}
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	done := make(chan error, 1)
+	go func() {
+		done <- session.WithTab(outerCtx, TabOptions{}, func(context.Context) error {
+			runCallbackExecuted <- struct{}{}
+			return nil
+		})
+	}()
+	select {
+	case <-tabInitStarted:
+	case <-time.After(time.Second):
+		t.Fatal("tab init did not start")
+	}
+	cancelStuckInit()
+	select {
+	case withTabError := <-done:
+		if withTabError == nil || !contains(withTabError.Error(), "initializing browser tab") || !contains(withTabError.Error(), context.Canceled.Error()) {
+			t.Fatalf("WithTab(canceled tab init) error = %v", withTabError)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("WithTab() did not honor caller cancellation during tab init")
+	}
+	select {
+	case <-runCallbackExecuted:
+		t.Fatal("run callback should not execute when tab init is canceled")
+	default:
+	}
 }
 
 func TestCloseNilAndIdempotent(t *testing.T) {
