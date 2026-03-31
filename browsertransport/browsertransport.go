@@ -11,6 +11,9 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
+	"os/exec"
+	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -23,18 +26,113 @@ import (
 )
 
 // DefaultStealthScript removes common browser automation markers before page
-// JavaScript runs.
+// JavaScript runs. It covers navigator properties, WebGL renderer masking,
+// chrome API stubs, screen/window dimensions, and CDP artifact cleanup.
 const DefaultStealthScript = `
-		Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-		Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
-		Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
-		window.chrome = { runtime: {} };
-		const originalQuery = window.navigator.permissions.query;
-		window.navigator.permissions.query = (parameters) => (
-			parameters.name === 'notifications' ?
-				Promise.resolve({ state: Notification.permission }) :
-				originalQuery(parameters)
-		);
+(function() {
+	// 1. navigator.webdriver
+	Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+
+	// 2. navigator.plugins — realistic PluginArray mock
+	const pluginData = [
+		{ name: 'Chrome PDF Plugin', filename: 'internal-pdf-viewer', description: 'Portable Document Format' },
+		{ name: 'Chrome PDF Viewer', filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai', description: '' },
+		{ name: 'Native Client', filename: 'internal-nacl-plugin', description: '' },
+	];
+	const pluginArray = Object.create(PluginArray.prototype);
+	pluginData.forEach(function(p, i) {
+		const plugin = Object.create(Plugin.prototype);
+		Object.defineProperties(plugin, {
+			name: { value: p.name, enumerable: true },
+			filename: { value: p.filename, enumerable: true },
+			description: { value: p.description, enumerable: true },
+			length: { value: 0, enumerable: true },
+		});
+		Object.defineProperty(pluginArray, i, { value: plugin, enumerable: true });
+	});
+	Object.defineProperty(pluginArray, 'length', { value: pluginData.length, enumerable: true });
+	pluginArray.item = function(i) { return this[i] || null; };
+	pluginArray.namedItem = function(n) {
+		for (var i = 0; i < this.length; i++) { if (this[i].name === n) return this[i]; }
+		return null;
+	};
+	pluginArray.refresh = function() {};
+	Object.defineProperty(navigator, 'plugins', { get: () => pluginArray });
+
+	// 3. navigator.languages
+	Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+
+	// 4. navigator hardware properties
+	Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 8 });
+	Object.defineProperty(navigator, 'deviceMemory', { get: () => 8 });
+	Object.defineProperty(navigator, 'platform', { get: () => 'MacIntel' });
+	Object.defineProperty(navigator, 'maxTouchPoints', { get: () => 0 });
+
+	// 5. window.chrome — full stub matching real Chrome
+	window.chrome = {
+		app: {
+			isInstalled: false,
+			InstallState: { DISABLED: 'disabled', INSTALLED: 'installed', NOT_INSTALLED: 'not_installed' },
+			RunningState: { CANNOT_RUN: 'cannot_run', READY_TO_RUN: 'ready_to_run', RUNNING: 'running' },
+		},
+		runtime: {
+			OnInstalledReason: { CHROME_UPDATE: 'chrome_update', INSTALL: 'install', SHARED_MODULE_UPDATE: 'shared_module_update', UPDATE: 'update' },
+			OnRestartRequiredReason: { APP_UPDATE: 'app_update', OS_UPDATE: 'os_update', PERIODIC: 'periodic' },
+			PlatformArch: { ARM: 'arm', ARM64: 'arm64', MIPS: 'mips', MIPS64: 'mips64', X86_32: 'x86-32', X86_64: 'x86-64' },
+			PlatformNaclArch: { ARM: 'arm', MIPS: 'mips', MIPS64: 'mips64', X86_32: 'x86-32', X86_64: 'x86-64' },
+			PlatformOs: { ANDROID: 'android', CROS: 'cros', LINUX: 'linux', MAC: 'mac', OPENBSD: 'openbsd', WIN: 'win' },
+			RequestUpdateCheckStatus: { NO_UPDATE: 'no_update', THROTTLED: 'throttled', UPDATE_AVAILABLE: 'update_available' },
+			connect: function() {
+				return { onDisconnect: { addListener: function(){} }, onMessage: { addListener: function(){} }, postMessage: function(){}, disconnect: function(){} };
+			},
+			sendMessage: function() {},
+		},
+	};
+
+	// 6. navigator.permissions.query
+	const originalQuery = window.navigator.permissions.query.bind(window.navigator.permissions);
+	window.navigator.permissions.query = (parameters) => (
+		parameters.name === 'notifications'
+			? Promise.resolve({ state: Notification.permission })
+			: originalQuery(parameters)
+	);
+
+	// 7. WebGL renderer masking — hide SwiftShader
+	const UNMASKED_VENDOR = 0x9245;
+	const UNMASKED_RENDERER = 0x9246;
+	const spoofVendor = 'Google Inc. (Apple)';
+	const spoofRenderer = 'ANGLE (Apple, Apple M1 Pro, OpenGL 4.1)';
+	function patchGetParameter(proto) {
+		if (!proto) return;
+		const orig = proto.getParameter;
+		proto.getParameter = function(param) {
+			if (param === UNMASKED_VENDOR) return spoofVendor;
+			if (param === UNMASKED_RENDERER) return spoofRenderer;
+			return orig.call(this, param);
+		};
+	}
+	patchGetParameter(WebGLRenderingContext.prototype);
+	if (typeof WebGL2RenderingContext !== 'undefined') {
+		patchGetParameter(WebGL2RenderingContext.prototype);
+	}
+
+	// 8. Screen dimensions — match 1920x1080 with realistic menu bar
+	Object.defineProperty(screen, 'width', { get: () => 1920 });
+	Object.defineProperty(screen, 'height', { get: () => 1080 });
+	Object.defineProperty(screen, 'availWidth', { get: () => 1920 });
+	Object.defineProperty(screen, 'availHeight', { get: () => 1055 });
+	Object.defineProperty(screen, 'colorDepth', { get: () => 24 });
+	Object.defineProperty(screen, 'pixelDepth', { get: () => 24 });
+
+	// 9. Window outer dimensions — realistic browser chrome gap
+	Object.defineProperty(window, 'outerWidth', { get: () => 1920 });
+	Object.defineProperty(window, 'outerHeight', { get: () => 1080 });
+
+	// 10. Delete ChromeDriver detection artifacts (cdc_ properties)
+	for (const key of Object.keys(window)) {
+		if (/^cdc_/.test(key)) { delete window[key]; }
+	}
+})();
 `
 
 const defaultRenderTimeout = 30 * time.Second
@@ -208,7 +306,7 @@ func NewSession(ctx context.Context, browserProfile BrowserProfile, launchOption
 
 	allocatorOptions := chromedp.DefaultExecAllocatorOptions[:]
 	allocatorOptions = append(allocatorOptions,
-		chromedp.Flag("headless", true),
+		chromedp.Flag("headless", "new"),
 		chromedp.Flag("disable-gpu", true),
 		chromedp.Flag("no-sandbox", true),
 		chromedp.Flag("disable-dev-shm-usage", true),
@@ -218,6 +316,12 @@ func NewSession(ctx context.Context, browserProfile BrowserProfile, launchOption
 		chromedp.Flag("disable-extensions", true),
 		chromedp.Flag("disable-popup-blocking", true),
 		chromedp.Flag("disable-default-apps", true),
+		chromedp.Flag("disable-background-networking", true),
+		chromedp.Flag("disable-background-timer-throttling", true),
+		chromedp.Flag("disable-backgrounding-occluded-windows", true),
+		chromedp.Flag("disable-renderer-backgrounding", true),
+		chromedp.Flag("disable-component-update", true),
+		chromedp.Flag("enable-features", "NetworkService,NetworkServiceInProcess"),
 		chromedp.WindowSize(1920, 1080),
 		chromedp.Flag("lang", "en-US,en"),
 	)
@@ -812,4 +916,50 @@ func (forwarder *socksForwarder) handleConnection(clientConnection net.Conn) {
 	go func() { _, _ = io.Copy(upstreamConnection, clientConnection); done <- struct{}{} }()
 	go func() { _, _ = io.Copy(clientConnection, upstreamConnection); done <- struct{}{} }()
 	<-done
+}
+
+// defaultChromeVersion is used when runtime detection fails.
+const defaultChromeVersion = "130"
+
+var chromeVersionPattern = regexp.MustCompile(`(\d+)\.\d+\.\d+\.\d+`)
+
+// DetectChromeVersion returns the major version of the Chrome binary at
+// execPath, or tries common platform paths when execPath is empty.
+// Returns an empty string if detection fails.
+func DetectChromeVersion(execPath string) string {
+	candidates := []string{execPath}
+	if strings.TrimSpace(execPath) == "" {
+		if runtime.GOOS == "darwin" {
+			candidates = []string{"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"}
+		} else {
+			candidates = []string{"google-chrome", "google-chrome-stable", "chromium-browser", "chromium"}
+		}
+	}
+
+	for _, candidate := range candidates {
+		if candidate == "" {
+			continue
+		}
+		output, err := exec.Command(candidate, "--version").Output()
+		if err != nil {
+			continue
+		}
+		matches := chromeVersionPattern.FindSubmatch(output)
+		if len(matches) >= 2 {
+			return string(matches[1])
+		}
+	}
+
+	return ""
+}
+
+// DefaultUserAgent returns a realistic Chrome User-Agent string whose major
+// version matches the installed Chrome binary. Falls back to a recent hardcoded
+// version when detection fails.
+func DefaultUserAgent(execPath string) string {
+	majorVersion := DetectChromeVersion(execPath)
+	if majorVersion == "" {
+		majorVersion = defaultChromeVersion
+	}
+	return fmt.Sprintf("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/%s.0.0.0 Safari/537.36", majorVersion)
 }
