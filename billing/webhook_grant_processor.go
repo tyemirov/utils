@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -50,6 +49,7 @@ var (
 
 type WebhookGrant struct {
 	UserEmail string
+	SubjectID string
 	Credits   int64
 	Reason    string
 	Reference string
@@ -100,31 +100,23 @@ func (processor *webhookCreditsProcessor) Process(ctx context.Context, event Web
 
 	grantErr := processor.granter.GrantBillingCredits(ctx, CreditGrantInput{
 		UserEmail:      grant.UserEmail,
+		SubjectID:      grant.SubjectID,
 		Credits:        grant.Credits,
 		IdempotencyKey: strings.TrimSpace(grant.Reference),
 		Reason:         strings.TrimSpace(grant.Reason),
 		Reference:      strings.TrimSpace(grant.Reference),
 		Metadata:       grantMetadata,
 	})
-	if grantErr == nil || errors.Is(grantErr, ErrDuplicateGrant) {
+	if grantErr == nil ||
+		errors.Is(grantErr, ErrDuplicateGrant) ||
+		errors.Is(grantErr, ErrGrantRecipientUnresolved) {
 		return nil
 	}
 	return fmt.Errorf("billing.webhook.grant.apply: %w", grantErr)
 }
 
 func cloneGrantMetadata(source map[string]string) map[string]string {
-	if len(source) == 0 {
-		return map[string]string{}
-	}
-	target := make(map[string]string, len(source))
-	for key, value := range source {
-		trimmedKey := strings.TrimSpace(key)
-		if trimmedKey == "" {
-			continue
-		}
-		target[trimmedKey] = strings.TrimSpace(value)
-	}
-	return target
+	return cloneStringMap(source)
 }
 
 func NewWebhookGrantResolver(provider CommerceProvider) (WebhookGrantResolver, error) {
@@ -279,13 +271,18 @@ func (resolver *paddleWebhookGrantResolver) Resolve(ctx context.Context, event W
 	}
 
 	priceID := strings.TrimSpace(resolvePaddleTransactionPriceID(payload.Data))
+	subjectID := metadataSubjectIDFromWebhook(payload.Data.CustomData)
 	userEmail, userEmailErr := resolver.resolveUserEmail(ctx, payload.Data)
 	if userEmailErr != nil {
 		return WebhookGrant{}, false, userEmailErr
 	}
 
 	purchaseKind := NormalizePurchaseKind(
-		webhookMetadataValue(payload.Data.CustomData, paddleMetadataPurchaseKindKey),
+		webhookMetadataValueAny(
+			payload.Data.CustomData,
+			billingMetadataPurchaseKindKey,
+			paddleLegacyMetadataPurchaseKindKey,
+		),
 	)
 	switch purchaseKind {
 	case paddlePurchaseKindSubscription, paddlePurchaseKindTopUpPack:
@@ -297,7 +294,13 @@ func (resolver *paddleWebhookGrantResolver) Resolve(ctx context.Context, event W
 	}
 
 	if purchaseKind == paddlePurchaseKindSubscription {
-		planCode := strings.ToLower(webhookMetadataValue(payload.Data.CustomData, paddleMetadataPlanCodeKey))
+		planCode := strings.ToLower(
+			webhookMetadataValueAny(
+				payload.Data.CustomData,
+				billingMetadataPlanCodeKey,
+				paddleLegacyMetadataPlanCodeKey,
+			),
+		)
 		if planCode == "" {
 			planGrantDefinition, hasPlanGrantDefinition := resolver.planGrantByPriceID[priceID]
 			if hasPlanGrantDefinition {
@@ -331,6 +334,7 @@ func (resolver *paddleWebhookGrantResolver) Resolve(ctx context.Context, event W
 		}
 		return WebhookGrant{
 			UserEmail: userEmail,
+			SubjectID: subjectID,
 			Credits:   planCredits,
 			Reason:    reason,
 			Reference: reference,
@@ -339,7 +343,14 @@ func (resolver *paddleWebhookGrantResolver) Resolve(ctx context.Context, event W
 	}
 
 	// purchaseKind == paddlePurchaseKindTopUpPack
-	packCode := NormalizePackCode(webhookMetadataValue(payload.Data.CustomData, paddleMetadataPackCodeKey))
+	packCode := NormalizePackCode(
+		webhookMetadataValueAny(
+			payload.Data.CustomData,
+			billingMetadataPackCodeKey,
+			paddleLegacyMetadataPackCodeKey,
+			crosswordLegacyMetadataPackCodeKey,
+		),
+	)
 	if packCode == "" {
 		packGrantDefinition, hasPackGrantDefinition := resolver.packGrantByPriceID[priceID]
 		if hasPackGrantDefinition {
@@ -382,6 +393,7 @@ func (resolver *paddleWebhookGrantResolver) Resolve(ctx context.Context, event W
 	}
 	return WebhookGrant{
 		UserEmail: userEmail,
+		SubjectID: subjectID,
 		Credits:   packCredits,
 		Reason:    reason,
 		Reference: reference,
@@ -407,7 +419,14 @@ func (resolver *paddleWebhookGrantResolver) resolveUserEmail(
 	ctx context.Context,
 	payload paddleTransactionCompletedWebhookData,
 ) (string, error) {
-	userEmail := strings.ToLower(webhookMetadataValue(payload.CustomData, paddleMetadataUserEmailKey))
+	userEmail := strings.ToLower(
+		webhookMetadataValueAny(
+			payload.CustomData,
+			billingMetadataUserEmailKey,
+			paddleLegacyMetadataUserEmailKey,
+			crosswordLegacyMetadataUserEmailKey,
+		),
+	)
 	if userEmail != "" {
 		return userEmail, nil
 	}
@@ -487,34 +506,13 @@ type paddleTransactionCompletedLineItemPrice struct {
 	ID string `json:"id"`
 }
 
-func webhookMetadataValue(metadata map[string]interface{}, key string) string {
-	if len(metadata) == 0 {
-		return ""
-	}
-	rawValue, hasValue := metadata[key]
-	if !hasValue || rawValue == nil {
-		return ""
-	}
-	switch typedValue := rawValue.(type) {
-	case string:
-		return strings.TrimSpace(typedValue)
-	case float64:
-		if typedValue == math.Trunc(typedValue) {
-			return strconv.FormatInt(int64(typedValue), 10)
-		}
-		return strconv.FormatFloat(typedValue, 'f', -1, 64)
-	case bool:
-		if typedValue {
-			return "true"
-		}
-		return "false"
-	default:
-		return strings.TrimSpace(fmt.Sprintf("%v", typedValue))
-	}
-}
-
 func parsePackCreditsFromMetadata(metadata map[string]interface{}) (int64, error) {
-	rawCreditsValue := webhookMetadataValue(metadata, paddleMetadataPackCreditsKey)
+	rawCreditsValue := webhookMetadataValueAny(
+		metadata,
+		billingMetadataPackCreditsKey,
+		paddleLegacyMetadataPackCreditsKey,
+		crosswordLegacyMetadataCreditsKey,
+	)
 	if rawCreditsValue == "" {
 		return 0, nil
 	}
@@ -547,4 +545,11 @@ func resolvePaddleTransactionPriceID(data paddleTransactionCompletedWebhookData)
 		}
 	}
 	return ""
+}
+
+func metadataSubjectIDFromWebhook(metadata map[string]interface{}) string {
+	return firstNonEmptyString(
+		webhookMetadataValueAny(metadata, billingMetadataSubjectIDKey),
+		webhookMetadataValueAny(metadata, crosswordLegacyMetadataSubjectIDKey),
+	)
 }

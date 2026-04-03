@@ -37,7 +37,7 @@ func TestResolveHTTPErrorDescriptorResolvesGenericBillingErrors(t *testing.T) {
 			name:                 "subscription upgrade required",
 			err:                  ErrBillingSubscriptionUpgrade,
 			expectedStatusCode:   http.StatusConflict,
-			expectedErrorMessage: "subscription_upgrade_required",
+			expectedErrorMessage: "subscription_already_active",
 		},
 		{
 			name:                 "subscription required for top-up packs",

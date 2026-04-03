@@ -14,6 +14,7 @@ type CreditGranter interface {
 // CreditGrantInput contains the data needed to grant credits from a billing event.
 type CreditGrantInput struct {
 	UserEmail      string
+	SubjectID      string
 	Credits        int64
 	IdempotencyKey string
 	Reason         string
@@ -23,3 +24,6 @@ type CreditGrantInput struct {
 
 // ErrDuplicateGrant signals an idempotent duplicate — not a failure.
 var ErrDuplicateGrant = errors.New("billing: duplicate grant")
+
+// ErrGrantRecipientUnresolved signals that the event could not be mapped to a recipient.
+var ErrGrantRecipientUnresolved = errors.New("billing: grant recipient unresolved")

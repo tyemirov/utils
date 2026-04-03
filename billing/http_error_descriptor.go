@@ -10,7 +10,6 @@ const (
 	billingHTTPMessageUnavailable             = "Billing unavailable"
 	billingHTTPMessageInvalidPlan             = "invalid_plan"
 	billingHTTPMessageSubscriptionActive      = "subscription_already_active"
-	billingHTTPMessageSubscriptionUpgradeOnly = "subscription_upgrade_required"
 	billingHTTPMessageSubscriptionRequired    = "subscription_required_for_top_up_packs"
 	billingHTTPMessageInvalidPackCode         = "invalid_pack_code"
 	billingHTTPMessageInvalidTransactionID    = "invalid_transaction_id"
@@ -52,11 +51,6 @@ func ResolveHTTPErrorDescriptor(providerCode string, err error) HTTPErrorDescrip
 		return HTTPErrorDescriptor{
 			StatusCode: http.StatusConflict,
 			Message:    billingHTTPMessageSubscriptionActive,
-		}
-	case errors.Is(err, ErrBillingSubscriptionUpgrade):
-		return HTTPErrorDescriptor{
-			StatusCode: http.StatusConflict,
-			Message:    billingHTTPMessageSubscriptionUpgradeOnly,
 		}
 	case errors.Is(err, ErrBillingSubscriptionRequired):
 		return HTTPErrorDescriptor{

@@ -23,6 +23,16 @@ const (
 )
 
 const (
+	billingMetadataUserEmailKey    = "billing_user_email"
+	billingMetadataSubjectIDKey    = "billing_subject_id"
+	billingMetadataPurchaseKindKey = "billing_purchase_kind"
+	billingMetadataPlanCodeKey     = "billing_plan_code"
+	billingMetadataPackCodeKey     = "billing_pack_code"
+	billingMetadataPackCreditsKey  = "billing_pack_credits"
+	billingMetadataPriceIDKey      = "billing_price_id"
+)
+
+const (
 	packLabelTopUp     = "Top-Up Pack"
 	packLabelBulkTopUp = "Bulk Top-Up Pack"
 )
@@ -93,6 +103,50 @@ type PublicConfig struct {
 	ClientToken  string
 }
 
+type PlanCatalogItem struct {
+	Code           string
+	Label          string
+	PriceID        string
+	MonthlyCredits int64
+	PriceCents     int64
+}
+
+type PackCatalogItem struct {
+	Code       string
+	Label      string
+	PriceID    string
+	Credits    int64
+	PriceCents int64
+}
+
+type CustomerContext struct {
+	Email     string
+	SubjectID string
+}
+
+func NormalizeCustomerContext(customer CustomerContext) CustomerContext {
+	return CustomerContext{
+		Email:     strings.ToLower(strings.TrimSpace(customer.Email)),
+		SubjectID: strings.TrimSpace(customer.SubjectID),
+	}
+}
+
+type TopUpEligibilityPolicy string
+
+const (
+	TopUpEligibilityPolicyRequiresActiveSubscription TopUpEligibilityPolicy = "requires_active_subscription"
+	TopUpEligibilityPolicyUnrestricted               TopUpEligibilityPolicy = "unrestricted"
+)
+
+func NormalizeTopUpEligibilityPolicy(rawPolicy TopUpEligibilityPolicy) TopUpEligibilityPolicy {
+	switch TopUpEligibilityPolicy(strings.ToLower(strings.TrimSpace(string(rawPolicy)))) {
+	case TopUpEligibilityPolicyUnrestricted:
+		return TopUpEligibilityPolicyUnrestricted
+	default:
+		return TopUpEligibilityPolicyRequiresActiveSubscription
+	}
+}
+
 type CheckoutSession struct {
 	ProviderCode  string
 	TransactionID string
@@ -110,9 +164,22 @@ type CommerceProvider interface {
 	TopUpPacks() []TopUpPack
 	PublicConfig() PublicConfig
 	BuildUserSyncEvents(context.Context, string) ([]WebhookEvent, error)
-	CreateSubscriptionCheckout(context.Context, string, string) (CheckoutSession, error)
-	CreateTopUpCheckout(context.Context, string, string) (CheckoutSession, error)
+	CreateSubscriptionCheckout(context.Context, CustomerContext, string) (CheckoutSession, error)
+	CreateTopUpCheckout(context.Context, CustomerContext, string) (CheckoutSession, error)
 	CreateCustomerPortalSession(context.Context, string) (PortalSession, error)
+}
+
+type ProviderSubscription struct {
+	SubscriptionID string
+	PlanCode       string
+	Status         string
+	ProviderStatus string
+	NextBillingAt  time.Time
+	OccurredAt     time.Time
+}
+
+type SubscriptionInspector interface {
+	InspectSubscriptions(context.Context, string) ([]ProviderSubscription, error)
 }
 
 type WebhookGrantResolverProvider interface {
@@ -174,12 +241,15 @@ func resolveWebhookProcessor(processor WebhookProcessor) WebhookProcessor {
 }
 
 var (
-	ErrBillingProviderUnavailable  = errors.New("billing.provider.unavailable")
-	ErrBillingUserEmailInvalid     = errors.New("billing.user_email.invalid")
-	ErrBillingPlanUnsupported      = errors.New("billing.plan.unsupported")
-	ErrBillingSubscriptionActive   = errors.New("billing.subscription.active")
-	ErrBillingSubscriptionUpgrade  = errors.New("billing.subscription.upgrade_required")
-	ErrBillingSubscriptionRequired = errors.New("billing.subscription.required")
-	ErrBillingTopUpPackUnknown     = errors.New("billing.top_up_pack.unknown")
-	ErrBillingUserSyncFailed       = errors.New("billing.user_sync.failed")
+	ErrBillingProviderUnavailable        = errors.New("billing.provider.unavailable")
+	ErrBillingUserEmailInvalid           = errors.New("billing.user_email.invalid")
+	ErrBillingPlanUnsupported            = errors.New("billing.plan.unsupported")
+	ErrBillingSubscriptionManageInPortal = errors.New("billing.subscription.manage_in_portal")
+	ErrBillingSubscriptionRequired       = errors.New("billing.subscription.required")
+	ErrBillingTopUpPackUnknown           = errors.New("billing.top_up_pack.unknown")
+	ErrBillingUserSyncFailed             = errors.New("billing.user_sync.failed")
+
+	// Deprecated aliases kept for compatibility with older callers and tests.
+	ErrBillingSubscriptionActive  = ErrBillingSubscriptionManageInPortal
+	ErrBillingSubscriptionUpgrade = ErrBillingSubscriptionManageInPortal
 )

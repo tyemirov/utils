@@ -32,20 +32,22 @@ type SubscriptionSummary struct {
 }
 
 type Service struct {
-	provider                CommerceProvider
-	subscriptionStateReader SubscriptionStateRepository
-	webhookProcessor        WebhookProcessor
+	provider                    CommerceProvider
+	subscriptionStateRepository SubscriptionStateRepository
+	webhookProcessor            WebhookProcessor
+	topUpEligibilityPolicy      TopUpEligibilityPolicy
 }
 
 func NewService(provider CommerceProvider, subscriptionStateReaders ...SubscriptionStateRepository) *Service {
-	var subscriptionStateReader SubscriptionStateRepository
+	var subscriptionStateRepository SubscriptionStateRepository
 	if len(subscriptionStateReaders) > 0 {
-		subscriptionStateReader = subscriptionStateReaders[0]
+		subscriptionStateRepository = subscriptionStateReaders[0]
 	}
 	return &Service{
-		provider:                provider,
-		subscriptionStateReader: subscriptionStateReader,
-		webhookProcessor:        nil,
+		provider:                    provider,
+		subscriptionStateRepository: subscriptionStateRepository,
+		webhookProcessor:            nil,
+		topUpEligibilityPolicy:      TopUpEligibilityPolicyRequiresActiveSubscription,
 	}
 }
 
@@ -56,6 +58,14 @@ func NewServiceWithWebhookProcessor(
 ) *Service {
 	service := NewService(provider, subscriptionStateReaders...)
 	service.webhookProcessor = resolveWebhookProcessor(webhookProcessor)
+	return service
+}
+
+func (service *Service) WithTopUpEligibilityPolicy(policy TopUpEligibilityPolicy) *Service {
+	if service == nil {
+		return nil
+	}
+	service.topUpEligibilityPolicy = NormalizeTopUpEligibilityPolicy(policy)
 	return service
 }
 
@@ -100,10 +110,14 @@ func (service *Service) GetSubscriptionSummary(ctx context.Context, userEmail st
 		Plans:               service.provider.SubscriptionPlans(),
 		TopUpPacks:          service.provider.TopUpPacks(),
 	}
-	if service.subscriptionStateReader == nil {
+	if service.subscriptionStateRepository == nil {
 		return summary, nil
 	}
-	state, found, stateErr := service.subscriptionStateReader.Get(ctx, service.provider.Code(), normalizedUserEmail)
+	state, found, stateErr := service.subscriptionStateRepository.Get(
+		ctx,
+		service.provider.Code(),
+		normalizedUserEmail,
+	)
 	if stateErr != nil {
 		return SubscriptionSummary{}, fmt.Errorf("billing.subscription.summary.state: %w", stateErr)
 	}
@@ -188,13 +202,14 @@ func (service *Service) syncUserBillingEvents(ctx context.Context, userEmail str
 
 func (service *Service) CreateSubscriptionCheckout(
 	ctx context.Context,
-	userEmail string,
+	customer CustomerContext,
 	planCode string,
 ) (CheckoutSession, error) {
 	if service == nil || service.provider == nil {
 		return CheckoutSession{}, ErrBillingProviderUnavailable
 	}
-	normalizedUserEmail := strings.ToLower(strings.TrimSpace(userEmail))
+	normalizedCustomer := NormalizeCustomerContext(customer)
+	normalizedUserEmail := normalizedCustomer.Email
 	if normalizedUserEmail == "" {
 		return CheckoutSession{}, ErrBillingUserEmailInvalid
 	}
@@ -202,18 +217,92 @@ func (service *Service) CreateSubscriptionCheckout(
 	if normalizedPlanCode == "" {
 		return CheckoutSession{}, ErrBillingPlanUnsupported
 	}
-	if validationErr := service.validateSubscriptionCheckoutTransition(
-		ctx,
-		normalizedUserEmail,
-		normalizedPlanCode,
-	); validationErr != nil {
+	if validationErr := service.validateSubscriptionPlan(normalizedPlanCode); validationErr != nil {
 		return CheckoutSession{}, validationErr
 	}
-	session, err := service.provider.CreateSubscriptionCheckout(ctx, normalizedUserEmail, normalizedPlanCode)
+	liveSubscriptions, subscriptionsInspected, inspectErr := service.inspectLiveSubscriptions(
+		ctx,
+		normalizedUserEmail,
+	)
+	if inspectErr != nil {
+		return CheckoutSession{}, fmt.Errorf("billing.checkout.subscription.inspect: %w", inspectErr)
+	}
+	if subscriptionsInspected && len(liveSubscriptions) > 0 {
+		if refreshErr := service.refreshSubscriptionStateFromInspection(
+			ctx,
+			normalizedUserEmail,
+			liveSubscriptions,
+		); refreshErr != nil {
+			return CheckoutSession{}, fmt.Errorf("billing.checkout.subscription.state: %w", refreshErr)
+		}
+		if activeProviderSubscriptionExists(liveSubscriptions) {
+			return CheckoutSession{}, ErrBillingSubscriptionManageInPortal
+		}
+	} else if validationErr := service.validateSubscriptionCheckoutTransition(ctx, normalizedUserEmail, normalizedPlanCode); validationErr != nil {
+		return CheckoutSession{}, validationErr
+	}
+	session, err := service.provider.CreateSubscriptionCheckout(ctx, normalizedCustomer, normalizedPlanCode)
 	if err != nil {
 		return CheckoutSession{}, fmt.Errorf("billing.checkout.subscription: %w", err)
 	}
 	return session, nil
+}
+
+func (service *Service) inspectLiveSubscriptions(
+	ctx context.Context,
+	userEmail string,
+) ([]ProviderSubscription, bool, error) {
+	if service == nil || service.provider == nil {
+		return nil, false, ErrBillingProviderUnavailable
+	}
+	subscriptionInspector, hasSubscriptionInspector := service.provider.(SubscriptionInspector)
+	if !hasSubscriptionInspector {
+		return nil, false, nil
+	}
+	normalizedUserEmail := strings.ToLower(strings.TrimSpace(userEmail))
+	if normalizedUserEmail == "" {
+		return nil, false, ErrBillingUserEmailInvalid
+	}
+	subscriptions, inspectErr := subscriptionInspector.InspectSubscriptions(ctx, normalizedUserEmail)
+	if inspectErr != nil {
+		return nil, true, inspectErr
+	}
+	return subscriptions, true, nil
+}
+
+func (service *Service) refreshSubscriptionStateFromInspection(
+	ctx context.Context,
+	userEmail string,
+	subscriptions []ProviderSubscription,
+) error {
+	if service == nil || service.provider == nil {
+		return ErrBillingProviderUnavailable
+	}
+	if service.subscriptionStateRepository == nil {
+		return nil
+	}
+	normalizedUserEmail := strings.ToLower(strings.TrimSpace(userEmail))
+	if normalizedUserEmail == "" {
+		return ErrBillingUserEmailInvalid
+	}
+	canonicalSubscription, foundCanonicalSubscription := canonicalProviderSubscription(subscriptions)
+	upsertInput := SubscriptionStateUpsertInput{
+		ProviderCode: service.provider.Code(),
+		UserEmail:    normalizedUserEmail,
+		Status:       subscriptionStatusInactive,
+	}
+	if foundCanonicalSubscription {
+		upsertInput.Status = canonicalSubscription.Status
+		upsertInput.ProviderStatus = canonicalSubscription.ProviderStatus
+		upsertInput.ActivePlan = canonicalSubscription.PlanCode
+		upsertInput.SubscriptionID = canonicalSubscription.SubscriptionID
+		upsertInput.NextBillingAt = canonicalSubscription.NextBillingAt
+		upsertInput.EventOccurredAt = canonicalSubscription.OccurredAt
+	}
+	if upsertErr := service.subscriptionStateRepository.Upsert(ctx, upsertInput); upsertErr != nil {
+		return upsertErr
+	}
+	return nil
 }
 
 func (service *Service) validateSubscriptionCheckoutTransition(
@@ -224,22 +313,24 @@ func (service *Service) validateSubscriptionCheckoutTransition(
 	if service == nil || service.provider == nil {
 		return ErrBillingProviderUnavailable
 	}
-	if service.subscriptionStateReader == nil {
+	if service.subscriptionStateRepository == nil {
 		return nil
 	}
 	normalizedUserEmail := strings.ToLower(strings.TrimSpace(userEmail))
 	if normalizedUserEmail == "" {
 		return ErrBillingUserEmailInvalid
 	}
-	normalizedPlanCode := strings.ToLower(strings.TrimSpace(planCode))
-	if normalizedPlanCode == "" {
+	if strings.TrimSpace(planCode) == "" {
 		return ErrBillingPlanUnsupported
 	}
-	requestedPlanCredits, hasRequestedPlanCredits := service.resolvePlanMonthlyCredits(normalizedPlanCode)
-	if !hasRequestedPlanCredits {
-		return ErrBillingPlanUnsupported
+	if validationErr := service.validateSubscriptionPlan(planCode); validationErr != nil {
+		return validationErr
 	}
-	state, found, stateErr := service.subscriptionStateReader.Get(ctx, service.provider.Code(), normalizedUserEmail)
+	state, found, stateErr := service.subscriptionStateRepository.Get(
+		ctx,
+		service.provider.Code(),
+		normalizedUserEmail,
+	)
 	if stateErr != nil {
 		return fmt.Errorf("billing.checkout.subscription.state: %w", stateErr)
 	}
@@ -249,21 +340,27 @@ func (service *Service) validateSubscriptionCheckoutTransition(
 	if strings.ToLower(strings.TrimSpace(state.Status)) != subscriptionStatusActive {
 		return nil
 	}
-	currentPlanCode := strings.ToLower(strings.TrimSpace(state.ActivePlan))
-	if currentPlanCode == "" {
-		return ErrBillingSubscriptionActive
+	return ErrBillingSubscriptionManageInPortal
+}
+
+func (service *Service) validateSubscriptionPlan(planCode string) error {
+	if service == nil || service.provider == nil {
+		return ErrBillingProviderUnavailable
 	}
-	if currentPlanCode == normalizedPlanCode {
-		return ErrBillingSubscriptionActive
+	normalizedPlanCode := strings.ToLower(strings.TrimSpace(planCode))
+	if normalizedPlanCode == "" {
+		return ErrBillingPlanUnsupported
 	}
-	currentPlanCredits, hasCurrentPlanCredits := service.resolvePlanMonthlyCredits(currentPlanCode)
-	if !hasCurrentPlanCredits {
-		return ErrBillingSubscriptionActive
+	plans := service.provider.SubscriptionPlans()
+	if len(plans) == 0 {
+		return nil
 	}
-	if requestedPlanCredits <= currentPlanCredits {
-		return ErrBillingSubscriptionUpgrade
+	for _, plan := range plans {
+		if strings.ToLower(strings.TrimSpace(plan.Code)) == normalizedPlanCode {
+			return nil
+		}
 	}
-	return nil
+	return ErrBillingPlanUnsupported
 }
 
 func (service *Service) resolvePlanMonthlyCredits(planCode string) (int64, bool) {
@@ -274,10 +371,8 @@ func (service *Service) resolvePlanMonthlyCredits(planCode string) (int64, bool)
 	if normalizedPlanCode == "" {
 		return 0, false
 	}
-	plans := service.provider.SubscriptionPlans()
-	for _, plan := range plans {
-		candidateCode := strings.ToLower(strings.TrimSpace(plan.Code))
-		if candidateCode == normalizedPlanCode {
+	for _, plan := range service.provider.SubscriptionPlans() {
+		if strings.ToLower(strings.TrimSpace(plan.Code)) == normalizedPlanCode {
 			return plan.MonthlyCredits, true
 		}
 	}
@@ -286,13 +381,14 @@ func (service *Service) resolvePlanMonthlyCredits(planCode string) (int64, bool)
 
 func (service *Service) CreateTopUpCheckout(
 	ctx context.Context,
-	userEmail string,
+	customer CustomerContext,
 	packCode string,
 ) (CheckoutSession, error) {
 	if service == nil || service.provider == nil {
 		return CheckoutSession{}, ErrBillingProviderUnavailable
 	}
-	normalizedUserEmail := strings.ToLower(strings.TrimSpace(userEmail))
+	normalizedCustomer := NormalizeCustomerContext(customer)
+	normalizedUserEmail := normalizedCustomer.Email
 	if normalizedUserEmail == "" {
 		return CheckoutSession{}, ErrBillingUserEmailInvalid
 	}
@@ -303,7 +399,7 @@ func (service *Service) CreateTopUpCheckout(
 	if validationErr := service.validateTopUpCheckoutEligibility(ctx, normalizedUserEmail); validationErr != nil {
 		return CheckoutSession{}, validationErr
 	}
-	session, err := service.provider.CreateTopUpCheckout(ctx, normalizedUserEmail, normalizedPackCode)
+	session, err := service.provider.CreateTopUpCheckout(ctx, normalizedCustomer, normalizedPackCode)
 	if err != nil {
 		return CheckoutSession{}, fmt.Errorf("billing.checkout.top_up: %w", err)
 	}
@@ -317,14 +413,41 @@ func (service *Service) validateTopUpCheckoutEligibility(
 	if service == nil || service.provider == nil {
 		return ErrBillingProviderUnavailable
 	}
-	if service.subscriptionStateReader == nil {
-		return ErrBillingSubscriptionRequired
+	if NormalizeTopUpEligibilityPolicy(service.topUpEligibilityPolicy) == TopUpEligibilityPolicyUnrestricted {
+		return nil
 	}
 	normalizedUserEmail := strings.ToLower(strings.TrimSpace(userEmail))
 	if normalizedUserEmail == "" {
 		return ErrBillingUserEmailInvalid
 	}
-	state, found, stateErr := service.subscriptionStateReader.Get(ctx, service.provider.Code(), normalizedUserEmail)
+	liveSubscriptions, subscriptionsInspected, inspectErr := service.inspectLiveSubscriptions(
+		ctx,
+		normalizedUserEmail,
+	)
+	if inspectErr != nil {
+		return fmt.Errorf("billing.checkout.top_up.inspect: %w", inspectErr)
+	}
+	if subscriptionsInspected {
+		if refreshErr := service.refreshSubscriptionStateFromInspection(
+			ctx,
+			normalizedUserEmail,
+			liveSubscriptions,
+		); refreshErr != nil {
+			return fmt.Errorf("billing.checkout.top_up.state: %w", refreshErr)
+		}
+		if activeProviderSubscriptionExists(liveSubscriptions) {
+			return nil
+		}
+		return ErrBillingSubscriptionRequired
+	}
+	if service.subscriptionStateRepository == nil {
+		return ErrBillingSubscriptionRequired
+	}
+	state, found, stateErr := service.subscriptionStateRepository.Get(
+		ctx,
+		service.provider.Code(),
+		normalizedUserEmail,
+	)
 	if stateErr != nil {
 		return fmt.Errorf("billing.checkout.top_up.state: %w", stateErr)
 	}
@@ -383,7 +506,7 @@ func (service *Service) ReconcileCheckout(
 	}
 	normalizedCheckoutUserEmail := strings.ToLower(strings.TrimSpace(checkoutUserEmail))
 	if normalizedCheckoutUserEmail != normalizedUserEmail {
-		return fmt.Errorf("%w", ErrBillingCheckoutOwnershipMismatch)
+		return fmt.Errorf("%w: %s", ErrBillingCheckoutOwnershipMismatch, normalizedTransactionID)
 	}
 	if isCheckoutReconcileEventPending(service.provider, webhookEvent.EventType) {
 		return ErrBillingCheckoutTransactionPending

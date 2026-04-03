@@ -6,19 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 )
 
 const (
 	paddleWebhookSignatureHeaderName = "Paddle-Signature"
-
-	paddleMetadataUserEmailKey    = "product_scanner_user_email"
-	paddleMetadataPurchaseKindKey = "product_scanner_purchase_kind"
-	paddleMetadataPlanCodeKey     = "product_scanner_plan_code"
-	paddleMetadataPackCodeKey     = "product_scanner_pack_code"
-	paddleMetadataPackCreditsKey  = "product_scanner_pack_credits"
 
 	paddlePurchaseKindSubscription = PurchaseKindSubscription
 	paddlePurchaseKindTopUpPack    = PurchaseKindTopUpPack
@@ -55,6 +48,8 @@ type PaddleProviderSettings struct {
 	APIBaseURL                 string
 	APIKey                     string
 	ClientToken                string
+	Plans                      []PlanCatalogItem
+	Packs                      []PackCatalogItem
 	ProMonthlyPriceID          string
 	PlusMonthlyPriceID         string
 	SubscriptionMonthlyCredits map[string]int64
@@ -110,6 +105,11 @@ type paddlePackDefinition struct {
 	PriceCents int64
 }
 
+type paddleInspectedSubscription struct {
+	payload    paddleSubscriptionWebhookData
+	normalized ProviderSubscription
+}
+
 type PaddleSignatureVerifier interface {
 	Verify(signatureHeader string, payload []byte) error
 }
@@ -126,7 +126,7 @@ type PaddleProvider struct {
 func NewPaddleProvider(
 	settings PaddleProviderSettings,
 	verifier PaddleSignatureVerifier,
-	client paddleCommerceClient,
+	client PaddleCommerceClient,
 ) (*PaddleProvider, error) {
 	if verifier == nil {
 		return nil, ErrPaddleProviderVerifierUnavailable
@@ -140,124 +140,84 @@ func NewPaddleProvider(
 	if normalizedClientToken == "" {
 		return nil, ErrPaddleProviderClientTokenEmpty
 	}
-	planCreditsByCode := make(map[string]int64, len(settings.SubscriptionMonthlyCredits))
-	for rawPlanCode, rawPlanCredits := range settings.SubscriptionMonthlyCredits {
-		normalizedPlanCode := strings.ToLower(strings.TrimSpace(rawPlanCode))
+	planDefinitions := make(map[string]paddlePlanDefinition)
+	for _, item := range buildPaddlePlanCatalogItems(settings) {
+		normalizedPlanCode := strings.ToLower(strings.TrimSpace(item.Code))
 		if normalizedPlanCode == "" {
 			continue
 		}
-		if rawPlanCredits <= 0 {
+		if strings.TrimSpace(item.PriceID) == "" {
+			return nil, fmt.Errorf("%w: %s", ErrPaddleProviderPriceIDEmpty, normalizedPlanCode)
+		}
+		if item.MonthlyCredits <= 0 {
+			if len(settings.Plans) == 0 {
+				if _, hasConfiguredCredits := settings.SubscriptionMonthlyCredits[normalizedPlanCode]; !hasConfiguredCredits {
+					return nil, fmt.Errorf("%w: %s", ErrPaddleProviderPlanCreditsMissing, normalizedPlanCode)
+				}
+			}
 			return nil, fmt.Errorf("%w: %s", ErrPaddleProviderPlanCreditsInvalid, normalizedPlanCode)
 		}
-		planCreditsByCode[normalizedPlanCode] = rawPlanCredits
-	}
-	planPricesByCode := make(map[string]int64, len(settings.SubscriptionMonthlyPrices))
-	for rawPlanCode, rawPlanPrice := range settings.SubscriptionMonthlyPrices {
-		normalizedPlanCode := strings.ToLower(strings.TrimSpace(rawPlanCode))
-		if normalizedPlanCode == "" {
-			continue
-		}
-		if rawPlanPrice <= 0 {
+		if item.PriceCents <= 0 {
+			if len(settings.Plans) == 0 {
+				if _, hasConfiguredPrice := settings.SubscriptionMonthlyPrices[normalizedPlanCode]; !hasConfiguredPrice {
+					return nil, fmt.Errorf("%w: %s", ErrPaddleProviderPlanPriceMissing, normalizedPlanCode)
+				}
+			}
 			return nil, fmt.Errorf("%w: %s", ErrPaddleProviderPlanPriceInvalid, normalizedPlanCode)
 		}
-		planPricesByCode[normalizedPlanCode] = rawPlanPrice
+		planDefinitions[normalizedPlanCode] = paddlePlanDefinition{
+			Plan: SubscriptionPlan{
+				Code:           normalizedPlanCode,
+				Label:          firstNonEmptyString(item.Label, defaultPlanLabel(normalizedPlanCode)),
+				MonthlyCredits: item.MonthlyCredits,
+				PriceDisplay:   formatUSDPriceCents(item.PriceCents),
+				BillingPeriod:  paddleBillingPeriodMonthly,
+			},
+			PriceID:    strings.TrimSpace(item.PriceID),
+			PriceCents: item.PriceCents,
+		}
 	}
 
-	planDefinitions := map[string]paddlePlanDefinition{
-		PlanCodePro: {
-			Plan: SubscriptionPlan{
-				Code:          PlanCodePro,
-				Label:         paddlePlanProLabel,
-				BillingPeriod: paddleBillingPeriodMonthly,
-			},
-			PriceID: strings.TrimSpace(settings.ProMonthlyPriceID),
-		},
-		PlanCodePlus: {
-			Plan: SubscriptionPlan{
-				Code:          PlanCodePlus,
-				Label:         paddlePlanPlusLabel,
-				BillingPeriod: paddleBillingPeriodMonthly,
-			},
-			PriceID: strings.TrimSpace(settings.PlusMonthlyPriceID),
-		},
-	}
-	for planCode, definition := range planDefinitions {
-		if definition.PriceID == "" {
-			return nil, fmt.Errorf("%w: %s", ErrPaddleProviderPriceIDEmpty, planCode)
-		}
-		planCredits, hasPlanCredits := planCreditsByCode[planCode]
-		if !hasPlanCredits {
-			return nil, fmt.Errorf("%w: %s", ErrPaddleProviderPlanCreditsMissing, planCode)
-		}
-		definition.Plan.MonthlyCredits = planCredits
-		planPrice, hasPlanPrice := planPricesByCode[planCode]
-		if !hasPlanPrice {
-			return nil, fmt.Errorf("%w: %s", ErrPaddleProviderPlanPriceMissing, planCode)
-		}
-		definition.Plan.PriceDisplay = formatUSDPriceCents(planPrice)
-		definition.PriceCents = planPrice
-		planDefinitions[planCode] = definition
-	}
-
-	packDefinitions := make(map[string]paddlePackDefinition, len(settings.TopUpPackPriceIDs))
-	packCreditsByCode := make(map[string]int64, len(settings.TopUpPackCredits))
-	for rawPackCode, rawPackCredits := range settings.TopUpPackCredits {
-		normalizedPackCode := NormalizePackCode(rawPackCode)
+	packDefinitions := make(map[string]paddlePackDefinition)
+	for _, item := range buildPaddlePackCatalogItems(settings) {
+		normalizedPackCode := NormalizePackCode(item.Code)
 		if normalizedPackCode == "" {
 			continue
 		}
-		if rawPackCredits <= 0 {
-			return nil, fmt.Errorf("%w: %s", ErrPaddleProviderPackCreditsInvalid, normalizedPackCode)
-		}
-		packCreditsByCode[normalizedPackCode] = rawPackCredits
-	}
-	packPricesByCode := make(map[string]int64, len(settings.TopUpPackPrices))
-	for rawPackCode, rawPackPrice := range settings.TopUpPackPrices {
-		normalizedPackCode := NormalizePackCode(rawPackCode)
-		if normalizedPackCode == "" {
-			continue
-		}
-		if rawPackPrice <= 0 {
-			return nil, fmt.Errorf("%w: %s", ErrPaddleProviderPackPriceInvalid, normalizedPackCode)
-		}
-		packPricesByCode[normalizedPackCode] = rawPackPrice
-	}
-	for rawPackCode, rawPriceID := range settings.TopUpPackPriceIDs {
-		normalizedPackCode := NormalizePackCode(rawPackCode)
-		if normalizedPackCode == "" {
-			continue
-		}
-		normalizedPriceID := strings.TrimSpace(rawPriceID)
-		if normalizedPriceID == "" {
+		if strings.TrimSpace(item.PriceID) == "" {
+			if len(settings.Packs) == 0 {
+				if _, hasConfiguredPriceID := settings.TopUpPackPriceIDs[normalizedPackCode]; !hasConfiguredPriceID {
+					return nil, fmt.Errorf("%w: %s", ErrPaddleProviderPackPriceIDMissing, normalizedPackCode)
+				}
+			}
 			return nil, fmt.Errorf("%w: %s", ErrPaddleProviderPriceIDEmpty, normalizedPackCode)
 		}
-		packCredits, hasPackCredits := packCreditsByCode[normalizedPackCode]
-		if !hasPackCredits {
-			return nil, fmt.Errorf("%w: %s", ErrPaddleProviderPackCreditsMissing, normalizedPackCode)
+		if item.Credits <= 0 {
+			if len(settings.Packs) == 0 {
+				if _, hasConfiguredCredits := settings.TopUpPackCredits[normalizedPackCode]; !hasConfiguredCredits {
+					return nil, fmt.Errorf("%w: %s", ErrPaddleProviderPackCreditsMissing, normalizedPackCode)
+				}
+			}
+			return nil, fmt.Errorf("%w: %s", ErrPaddleProviderPackCreditsInvalid, normalizedPackCode)
 		}
-		packPrice, hasPackPrice := packPricesByCode[normalizedPackCode]
-		if !hasPackPrice {
-			return nil, fmt.Errorf("%w: %s", ErrPaddleProviderPackPriceMissing, normalizedPackCode)
-		}
-		packLabel := PackLabelForCode(normalizedPackCode)
-		if packLabel == "" {
-			packLabel = toTitle(normalizedPackCode)
+		if item.PriceCents <= 0 {
+			if len(settings.Packs) == 0 {
+				if _, hasConfiguredPrice := settings.TopUpPackPrices[normalizedPackCode]; !hasConfiguredPrice {
+					return nil, fmt.Errorf("%w: %s", ErrPaddleProviderPackPriceMissing, normalizedPackCode)
+				}
+			}
+			return nil, fmt.Errorf("%w: %s", ErrPaddleProviderPackPriceInvalid, normalizedPackCode)
 		}
 		packDefinitions[normalizedPackCode] = paddlePackDefinition{
 			Pack: TopUpPack{
 				Code:          normalizedPackCode,
-				Label:         packLabel,
-				Credits:       packCredits,
-				PriceDisplay:  formatUSDPriceCents(packPrice),
+				Label:         firstNonEmptyString(item.Label, PackLabelForCode(normalizedPackCode), toTitle(normalizedPackCode)),
+				Credits:       item.Credits,
+				PriceDisplay:  formatUSDPriceCents(item.PriceCents),
 				BillingPeriod: paddleBillingPeriodOneTime,
 			},
-			PriceID:    normalizedPriceID,
-			PriceCents: packPrice,
-		}
-	}
-	for normalizedPackCode := range packCreditsByCode {
-		if _, hasPackDefinition := packDefinitions[normalizedPackCode]; !hasPackDefinition {
-			return nil, fmt.Errorf("%w: %s", ErrPaddleProviderPackPriceIDMissing, normalizedPackCode)
+			PriceID:    strings.TrimSpace(item.PriceID),
+			PriceCents: item.PriceCents,
 		}
 	}
 	resolvedClient := client
@@ -282,6 +242,75 @@ func NewPaddleProvider(
 		plans:       planDefinitions,
 		packs:       packDefinitions,
 	}, nil
+}
+
+func buildPaddlePlanCatalogItems(settings PaddleProviderSettings) []PlanCatalogItem {
+	if len(settings.Plans) > 0 {
+		return append([]PlanCatalogItem(nil), settings.Plans...)
+	}
+	items := make([]PlanCatalogItem, 0, 2)
+	appendLegacyPlan := func(code string, label string, priceID string) {
+		trimmedPriceID := strings.TrimSpace(priceID)
+		credits := settings.SubscriptionMonthlyCredits[code]
+		priceCents := settings.SubscriptionMonthlyPrices[code]
+		if trimmedPriceID == "" && credits == 0 && priceCents == 0 {
+			return
+		}
+		items = append(items, PlanCatalogItem{
+			Code:           code,
+			Label:          label,
+			PriceID:        trimmedPriceID,
+			MonthlyCredits: credits,
+			PriceCents:     priceCents,
+		})
+	}
+	appendLegacyPlan(PlanCodePro, paddlePlanProLabel, settings.ProMonthlyPriceID)
+	appendLegacyPlan(PlanCodePlus, paddlePlanPlusLabel, settings.PlusMonthlyPriceID)
+	return items
+}
+
+func buildPaddlePackCatalogItems(settings PaddleProviderSettings) []PackCatalogItem {
+	if len(settings.Packs) > 0 {
+		return append([]PackCatalogItem(nil), settings.Packs...)
+	}
+	packCodes := make(map[string]struct{})
+	for rawPackCode := range settings.TopUpPackPriceIDs {
+		packCodes[NormalizePackCode(rawPackCode)] = struct{}{}
+	}
+	for rawPackCode := range settings.TopUpPackCredits {
+		packCodes[NormalizePackCode(rawPackCode)] = struct{}{}
+	}
+	for rawPackCode := range settings.TopUpPackPrices {
+		packCodes[NormalizePackCode(rawPackCode)] = struct{}{}
+	}
+	items := make([]PackCatalogItem, 0, len(packCodes))
+	for packCode := range packCodes {
+		if packCode == "" {
+			continue
+		}
+		items = append(items, PackCatalogItem{
+			Code:       packCode,
+			Label:      firstNonEmptyString(PackLabelForCode(packCode), toTitle(packCode)),
+			PriceID:    strings.TrimSpace(settings.TopUpPackPriceIDs[packCode]),
+			Credits:    settings.TopUpPackCredits[packCode],
+			PriceCents: settings.TopUpPackPrices[packCode],
+		})
+	}
+	sort.SliceStable(items, func(leftIndex int, rightIndex int) bool {
+		return items[leftIndex].Code < items[rightIndex].Code
+	})
+	return items
+}
+
+func defaultPlanLabel(planCode string) string {
+	switch strings.ToLower(strings.TrimSpace(planCode)) {
+	case PlanCodePro:
+		return paddlePlanProLabel
+	case PlanCodePlus:
+		return paddlePlanPlusLabel
+	default:
+		return toTitle(planCode)
+	}
 }
 
 func (provider *PaddleProvider) Code() string {
@@ -422,6 +451,35 @@ func (provider *PaddleProvider) BuildUserSyncEvents(
 	return syncEvents, nil
 }
 
+func (provider *PaddleProvider) InspectSubscriptions(
+	ctx context.Context,
+	userEmail string,
+) ([]ProviderSubscription, error) {
+	if provider == nil || provider.client == nil {
+		return nil, ErrPaddleProviderClientUnavailable
+	}
+	normalizedUserEmail := strings.ToLower(strings.TrimSpace(userEmail))
+	if normalizedUserEmail == "" {
+		return nil, ErrBillingUserEmailInvalid
+	}
+	customerID, customerIDErr := provider.client.FindCustomerIDByEmail(ctx, normalizedUserEmail)
+	if customerIDErr != nil {
+		return nil, fmt.Errorf("billing.paddle.customer.find: %w", customerIDErr)
+	}
+	if strings.TrimSpace(customerID) == "" {
+		return []ProviderSubscription{}, nil
+	}
+	inspectedSubscriptions, inspectErr := provider.inspectCustomerSubscriptions(ctx, customerID)
+	if inspectErr != nil {
+		return nil, inspectErr
+	}
+	resolvedSubscriptions := make([]ProviderSubscription, 0, len(inspectedSubscriptions))
+	for _, subscription := range inspectedSubscriptions {
+		resolvedSubscriptions = append(resolvedSubscriptions, subscription.normalized)
+	}
+	return resolvedSubscriptions, nil
+}
+
 func (provider *PaddleProvider) buildUserTransactionSyncEvents(
 	ctx context.Context,
 	customerID string,
@@ -469,11 +527,6 @@ func (provider *PaddleProvider) buildUserTransactionSyncEvents(
 	return syncEvents, nil
 }
 
-type paddleSubscriptionSyncEvent struct {
-	WebhookEvent
-	isActive bool
-}
-
 func (provider *PaddleProvider) buildUserSubscriptionSyncEvents(
 	ctx context.Context,
 	customerID string,
@@ -491,7 +544,8 @@ func (provider *PaddleProvider) buildUserSubscriptionSyncEvents(
 				Status:     paddleSubscriptionStatusInactive,
 				CustomerID: customerID,
 				CustomData: map[string]interface{}{
-					paddleMetadataUserEmailKey: userEmail,
+					billingMetadataUserEmailKey:      userEmail,
+					paddleLegacyMetadataUserEmailKey: userEmail,
 				},
 				UpdatedAt: occurredAt.Format(time.RFC3339Nano),
 			},
@@ -509,8 +563,7 @@ func (provider *PaddleProvider) buildUserSubscriptionSyncEvents(
 			},
 		}, nil
 	}
-
-	subscriptionEvents := make([]paddleSubscriptionSyncEvent, 0, len(subscriptions))
+	subscriptionEvents := make([]WebhookEvent, 0, len(subscriptions))
 	for _, subscription := range subscriptions {
 		subscriptionID := strings.TrimSpace(subscription.ID)
 		if subscriptionID == "" {
@@ -526,25 +579,29 @@ func (provider *PaddleProvider) buildUserSubscriptionSyncEvents(
 		if occurredAt.IsZero() {
 			return nil, ErrPaddleWebhookPayloadInvalid
 		}
-		resolvedStatus := resolvePaddleSubscriptionState(paddleEventTypeSubscriptionUpdated, subscription.Status)
-		subscriptionEvents = append(subscriptionEvents, paddleSubscriptionSyncEvent{
-			WebhookEvent: WebhookEvent{
-				ProviderCode: provider.Code(),
-				EventID: fmt.Sprintf(
-					"sync:subscription:%s:%s",
-					subscriptionID,
-					strings.ToLower(strings.TrimSpace(subscription.Status)),
-				),
-				EventType:  paddleEventTypeSubscriptionUpdated,
-				OccurredAt: occurredAt,
-				Payload:    payloadBytes,
-			},
-			isActive: resolvedStatus == subscriptionStatusActive,
+		subscriptionEvents = append(subscriptionEvents, WebhookEvent{
+			ProviderCode: provider.Code(),
+			EventID: fmt.Sprintf(
+				"sync:subscription:%s:%s",
+				subscriptionID,
+				strings.ToLower(strings.TrimSpace(subscription.Status)),
+			),
+			EventType:  paddleEventTypeSubscriptionUpdated,
+			OccurredAt: occurredAt,
+			Payload:    payloadBytes,
 		})
 	}
 	sort.SliceStable(subscriptionEvents, func(leftIndex int, rightIndex int) bool {
-		if subscriptionEvents[leftIndex].isActive != subscriptionEvents[rightIndex].isActive {
-			return !subscriptionEvents[leftIndex].isActive
+		leftStatus := resolvePaddleSubscriptionState(
+			paddleEventTypeSubscriptionUpdated,
+			extractPaddleSyncSubscriptionStatus(subscriptionEvents[leftIndex]),
+		)
+		rightStatus := resolvePaddleSubscriptionState(
+			paddleEventTypeSubscriptionUpdated,
+			extractPaddleSyncSubscriptionStatus(subscriptionEvents[rightIndex]),
+		)
+		if leftStatus != rightStatus {
+			return leftStatus != subscriptionStatusActive
 		}
 		leftOccurredAt := subscriptionEvents[leftIndex].OccurredAt
 		rightOccurredAt := subscriptionEvents[rightIndex].OccurredAt
@@ -553,22 +610,19 @@ func (provider *PaddleProvider) buildUserSubscriptionSyncEvents(
 		}
 		return leftOccurredAt.Before(rightOccurredAt)
 	})
-	resolvedEvents := make([]WebhookEvent, 0, len(subscriptionEvents))
-	for _, subscriptionEvent := range subscriptionEvents {
-		resolvedEvents = append(resolvedEvents, subscriptionEvent.WebhookEvent)
-	}
-	return resolvedEvents, nil
+	return subscriptionEvents, nil
 }
 
 func (provider *PaddleProvider) CreateSubscriptionCheckout(
 	ctx context.Context,
-	userEmail string,
+	customer CustomerContext,
 	planCode string,
 ) (CheckoutSession, error) {
 	if provider == nil || provider.client == nil {
 		return CheckoutSession{}, ErrPaddleProviderClientUnavailable
 	}
-	normalizedUserEmail := strings.TrimSpace(userEmail)
+	normalizedCustomer := NormalizeCustomerContext(customer)
+	normalizedUserEmail := normalizedCustomer.Email
 	if normalizedUserEmail == "" {
 		return CheckoutSession{}, ErrBillingUserEmailInvalid
 	}
@@ -586,11 +640,7 @@ func (provider *PaddleProvider) CreateSubscriptionCheckout(
 	transactionID, err := provider.client.CreateTransaction(ctx, paddleTransactionInput{
 		CustomerID: customerID,
 		PriceID:    planDefinition.PriceID,
-		Metadata: map[string]string{
-			paddleMetadataUserEmailKey:    normalizedUserEmail,
-			paddleMetadataPurchaseKindKey: paddlePurchaseKindSubscription,
-			paddleMetadataPlanCodeKey:     planDefinition.Plan.Code,
-		},
+		Metadata:   buildCheckoutMetadata(normalizedCustomer, paddlePurchaseKindSubscription, planDefinition.Plan.Code, 0, planDefinition.PriceID),
 	})
 	if err != nil {
 		return CheckoutSession{}, fmt.Errorf("billing.paddle.transaction.create: %w", err)
@@ -605,13 +655,14 @@ func (provider *PaddleProvider) CreateSubscriptionCheckout(
 
 func (provider *PaddleProvider) CreateTopUpCheckout(
 	ctx context.Context,
-	userEmail string,
+	customer CustomerContext,
 	packCode string,
 ) (CheckoutSession, error) {
 	if provider == nil || provider.client == nil {
 		return CheckoutSession{}, ErrPaddleProviderClientUnavailable
 	}
-	normalizedUserEmail := strings.TrimSpace(userEmail)
+	normalizedCustomer := NormalizeCustomerContext(customer)
+	normalizedUserEmail := normalizedCustomer.Email
 	if normalizedUserEmail == "" {
 		return CheckoutSession{}, ErrBillingUserEmailInvalid
 	}
@@ -629,12 +680,7 @@ func (provider *PaddleProvider) CreateTopUpCheckout(
 	transactionID, err := provider.client.CreateTransaction(ctx, paddleTransactionInput{
 		CustomerID: customerID,
 		PriceID:    packDefinition.PriceID,
-		Metadata: map[string]string{
-			paddleMetadataUserEmailKey:    normalizedUserEmail,
-			paddleMetadataPurchaseKindKey: paddlePurchaseKindTopUpPack,
-			paddleMetadataPackCodeKey:     packDefinition.Pack.Code,
-			paddleMetadataPackCreditsKey:  strconv.FormatInt(packDefinition.Pack.Credits, 10),
-		},
+		Metadata:   buildCheckoutMetadata(normalizedCustomer, paddlePurchaseKindTopUpPack, packDefinition.Pack.Code, packDefinition.Pack.Credits, packDefinition.PriceID),
 	})
 	if err != nil {
 		return CheckoutSession{}, fmt.Errorf("billing.paddle.transaction.create: %w", err)
@@ -718,7 +764,12 @@ func (provider *PaddleProvider) resolveCheckoutUserEmail(
 	transactionData paddleTransactionCompletedWebhookData,
 ) (string, error) {
 	checkoutUserEmail := strings.TrimSpace(
-		webhookMetadataValue(transactionData.CustomData, paddleMetadataUserEmailKey),
+		webhookMetadataValueAny(
+			transactionData.CustomData,
+			billingMetadataUserEmailKey,
+			paddleLegacyMetadataUserEmailKey,
+			crosswordLegacyMetadataUserEmailKey,
+		),
 	)
 	if checkoutUserEmail == "" {
 		checkoutUserEmail = strings.TrimSpace(resolvePaddleCustomerEmail(transactionData.Customer))
@@ -780,6 +831,55 @@ func resolvePaddleSubscriptionOccurredAt(subscriptionData paddleSubscriptionWebh
 		}
 	}
 	return time.Time{}
+}
+
+func extractPaddleSyncSubscriptionStatus(event WebhookEvent) string {
+	payload := paddleSubscriptionWebhookPayload{}
+	if decodeErr := json.Unmarshal(event.Payload, &payload); decodeErr != nil {
+		return ""
+	}
+	return payload.Data.Status
+}
+
+func (provider *PaddleProvider) inspectCustomerSubscriptions(
+	ctx context.Context,
+	customerID string,
+) ([]paddleInspectedSubscription, error) {
+	subscriptions, subscriptionsErr := provider.client.ListCustomerSubscriptions(ctx, customerID)
+	if subscriptionsErr != nil {
+		return nil, fmt.Errorf("billing.paddle.subscriptions.list: %w", subscriptionsErr)
+	}
+	planCodeByPriceID := buildPaddlePlanCodeByPriceID(provider.plans)
+	inspectedSubscriptions := make([]paddleInspectedSubscription, 0, len(subscriptions))
+	for _, subscription := range subscriptions {
+		subscriptionID := strings.TrimSpace(subscription.ID)
+		if subscriptionID == "" {
+			continue
+		}
+		planCode := strings.ToLower(
+			webhookMetadataValueAny(
+				subscription.CustomData,
+				billingMetadataPlanCodeKey,
+				paddleLegacyMetadataPlanCodeKey,
+			),
+		)
+		if planCode == "" {
+			priceID := resolvePaddleSubscriptionPriceID(subscription)
+			planCode = strings.ToLower(strings.TrimSpace(planCodeByPriceID[priceID]))
+		}
+		inspectedSubscriptions = append(inspectedSubscriptions, paddleInspectedSubscription{
+			payload: subscription,
+			normalized: normalizeProviderSubscription(ProviderSubscription{
+				SubscriptionID: subscriptionID,
+				PlanCode:       planCode,
+				Status:         resolvePaddleSubscriptionState(paddleEventTypeSubscriptionUpdated, subscription.Status),
+				ProviderStatus: subscription.Status,
+				NextBillingAt:  resolvePaddleSubscriptionNextBillingAt(subscription),
+				OccurredAt:     resolvePaddleSubscriptionOccurredAt(subscription),
+			}),
+		})
+	}
+	return inspectedSubscriptions, nil
 }
 
 func parsePaddleTimestamp(rawTimestamp string) (time.Time, error) {

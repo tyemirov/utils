@@ -10,6 +10,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func testCustomer(email string) CustomerContext {
+	return CustomerContext{Email: email}
+}
+
 type stubCommerceProvider struct {
 	code                        string
 	publicConfig                PublicConfig
@@ -98,10 +102,10 @@ func (provider *stubCommerceProvider) BuildUserSyncEvents(
 
 func (provider *stubCommerceProvider) CreateSubscriptionCheckout(
 	_ context.Context,
-	userEmail string,
+	customer CustomerContext,
 	planCode string,
 ) (CheckoutSession, error) {
-	provider.receivedSubscriptionEmail = userEmail
+	provider.receivedSubscriptionEmail = customer.Email
 	provider.receivedSubscriptionPlan = planCode
 	if provider.subscriptionCheckoutErr != nil {
 		return CheckoutSession{}, provider.subscriptionCheckoutErr
@@ -111,10 +115,10 @@ func (provider *stubCommerceProvider) CreateSubscriptionCheckout(
 
 func (provider *stubCommerceProvider) CreateTopUpCheckout(
 	_ context.Context,
-	userEmail string,
+	customer CustomerContext,
 	packCode string,
 ) (CheckoutSession, error) {
-	provider.receivedTopUpEmail = userEmail
+	provider.receivedTopUpEmail = customer.Email
 	provider.receivedTopUpPack = packCode
 	if provider.topUpCheckoutErr != nil {
 		return CheckoutSession{}, provider.topUpCheckoutErr
@@ -451,7 +455,7 @@ func TestBillingServiceSubscriptionCheckoutDelegatesToProvider(t *testing.T) {
 	}
 	service := NewService(provider)
 
-	session, err := service.CreateSubscriptionCheckout(context.Background(), " user@example.com ", " PRO ")
+	session, err := service.CreateSubscriptionCheckout(context.Background(), testCustomer(" user@example.com "), " PRO ")
 	require.NoError(t, err)
 	require.Equal(t, "user@example.com", provider.receivedSubscriptionEmail)
 	require.Equal(t, "pro", provider.receivedSubscriptionPlan)
@@ -479,7 +483,7 @@ func TestBillingServiceSubscriptionCheckoutRejectsActiveSamePlan(t *testing.T) {
 	}
 	service := NewService(provider, stateRepository)
 
-	_, err := service.CreateSubscriptionCheckout(context.Background(), "user@example.com", "pro")
+	_, err := service.CreateSubscriptionCheckout(context.Background(), testCustomer("user@example.com"), "pro")
 	require.ErrorIs(t, err, ErrBillingSubscriptionActive)
 	require.Equal(t, "", provider.receivedSubscriptionPlan)
 }
@@ -505,7 +509,7 @@ func TestBillingServiceSubscriptionCheckoutRejectsDowngradeWhenActive(t *testing
 	}
 	service := NewService(provider, stateRepository)
 
-	_, err := service.CreateSubscriptionCheckout(context.Background(), "user@example.com", "pro")
+	_, err := service.CreateSubscriptionCheckout(context.Background(), testCustomer("user@example.com"), "pro")
 	require.ErrorIs(t, err, ErrBillingSubscriptionUpgrade)
 	require.Equal(t, "", provider.receivedSubscriptionPlan)
 }
@@ -531,10 +535,10 @@ func TestBillingServiceSubscriptionCheckoutAllowsUpgradeWhenActive(t *testing.T)
 	}
 	service := NewService(provider, stateRepository)
 
-	session, err := service.CreateSubscriptionCheckout(context.Background(), "user@example.com", "plus")
-	require.NoError(t, err)
-	require.Equal(t, "plus", provider.receivedSubscriptionPlan)
-	require.Equal(t, "txn_123", session.TransactionID)
+	session, err := service.CreateSubscriptionCheckout(context.Background(), testCustomer("user@example.com"), "plus")
+	require.ErrorIs(t, err, ErrBillingSubscriptionManageInPortal)
+	require.Equal(t, "", provider.receivedSubscriptionPlan)
+	require.Equal(t, "", session.TransactionID)
 }
 
 func TestBillingServiceTopUpCheckoutDelegatesToProvider(t *testing.T) {
@@ -553,7 +557,7 @@ func TestBillingServiceTopUpCheckoutDelegatesToProvider(t *testing.T) {
 	}
 	service := NewService(provider, stateRepository)
 
-	session, err := service.CreateTopUpCheckout(context.Background(), " user@example.com ", " Top_Up ")
+	session, err := service.CreateTopUpCheckout(context.Background(), testCustomer(" user@example.com "), " Top_Up ")
 	require.NoError(t, err)
 	require.Equal(t, "user@example.com", provider.receivedTopUpEmail)
 	require.Equal(t, PackCodeTopUp, provider.receivedTopUpPack)
@@ -570,7 +574,7 @@ func TestBillingServiceTopUpCheckoutRejectsInactiveSubscription(t *testing.T) {
 	}
 	service := NewService(provider, stateRepository)
 
-	_, err := service.CreateTopUpCheckout(context.Background(), "user@example.com", PackCodeTopUp)
+	_, err := service.CreateTopUpCheckout(context.Background(), testCustomer("user@example.com"), PackCodeTopUp)
 	require.ErrorIs(t, err, ErrBillingSubscriptionRequired)
 	require.Equal(t, "", provider.receivedTopUpPack)
 }
@@ -579,7 +583,7 @@ func TestBillingServiceTopUpCheckoutRejectsMissingSubscriptionState(t *testing.T
 	provider := &stubCommerceProvider{}
 	service := NewService(provider)
 
-	_, err := service.CreateTopUpCheckout(context.Background(), "user@example.com", PackCodeTopUp)
+	_, err := service.CreateTopUpCheckout(context.Background(), testCustomer("user@example.com"), PackCodeTopUp)
 	require.ErrorIs(t, err, ErrBillingSubscriptionRequired)
 	require.Equal(t, "", provider.receivedTopUpPack)
 }
@@ -602,7 +606,7 @@ func TestBillingServicePortalDelegatesToProvider(t *testing.T) {
 func TestBillingServiceReturnsProviderUnavailableWhenMissing(t *testing.T) {
 	service := NewService(nil)
 
-	_, err := service.CreateSubscriptionCheckout(context.Background(), "user@example.com", "pro")
+	_, err := service.CreateSubscriptionCheckout(context.Background(), testCustomer("user@example.com"), "pro")
 	require.ErrorIs(t, err, ErrBillingProviderUnavailable)
 }
 
@@ -612,7 +616,7 @@ func TestBillingServiceWrapsProviderErrors(t *testing.T) {
 	}
 	service := NewService(provider)
 
-	_, err := service.CreateSubscriptionCheckout(context.Background(), "user@example.com", "pro")
+	_, err := service.CreateSubscriptionCheckout(context.Background(), testCustomer("user@example.com"), "pro")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "billing.checkout.subscription")
 }
@@ -821,19 +825,19 @@ func TestBillingServiceSyncUserBillingEventsProcessErrorReturnsRetryable(t *test
 
 func TestBillingServiceCreateSubscriptionCheckoutNilService(t *testing.T) {
 	var service *Service
-	_, err := service.CreateSubscriptionCheckout(context.Background(), "user@example.com", "pro")
+	_, err := service.CreateSubscriptionCheckout(context.Background(), testCustomer("user@example.com"), "pro")
 	require.ErrorIs(t, err, ErrBillingProviderUnavailable)
 }
 
 func TestBillingServiceCreateSubscriptionCheckoutInvalidEmail(t *testing.T) {
 	service := NewService(&stubCommerceProvider{code: ProviderCodePaddle})
-	_, err := service.CreateSubscriptionCheckout(context.Background(), " ", "pro")
+	_, err := service.CreateSubscriptionCheckout(context.Background(), testCustomer(" "), "pro")
 	require.ErrorIs(t, err, ErrBillingUserEmailInvalid)
 }
 
 func TestBillingServiceCreateSubscriptionCheckoutEmptyPlan(t *testing.T) {
 	service := NewService(&stubCommerceProvider{code: ProviderCodePaddle})
-	_, err := service.CreateSubscriptionCheckout(context.Background(), "user@example.com", " ")
+	_, err := service.CreateSubscriptionCheckout(context.Background(), testCustomer("user@example.com"), " ")
 	require.ErrorIs(t, err, ErrBillingPlanUnsupported)
 }
 
@@ -842,7 +846,7 @@ func TestBillingServiceCreateSubscriptionCheckoutProviderError(t *testing.T) {
 		code:                    ProviderCodePaddle,
 		subscriptionCheckoutErr: errors.New("provider error"),
 	})
-	_, err := service.CreateSubscriptionCheckout(context.Background(), "user@example.com", "pro")
+	_, err := service.CreateSubscriptionCheckout(context.Background(), testCustomer("user@example.com"), "pro")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "billing.checkout.subscription")
 }
@@ -986,19 +990,19 @@ func TestResolvePlanMonthlyCreditsNotFoundPlan(t *testing.T) {
 
 func TestBillingServiceCreateTopUpCheckoutNilService(t *testing.T) {
 	var service *Service
-	_, err := service.CreateTopUpCheckout(context.Background(), "user@example.com", "top_up")
+	_, err := service.CreateTopUpCheckout(context.Background(), testCustomer("user@example.com"), "top_up")
 	require.ErrorIs(t, err, ErrBillingProviderUnavailable)
 }
 
 func TestBillingServiceCreateTopUpCheckoutInvalidEmail(t *testing.T) {
 	service := NewService(&stubCommerceProvider{code: ProviderCodePaddle})
-	_, err := service.CreateTopUpCheckout(context.Background(), " ", "top_up")
+	_, err := service.CreateTopUpCheckout(context.Background(), testCustomer(" "), "top_up")
 	require.ErrorIs(t, err, ErrBillingUserEmailInvalid)
 }
 
 func TestBillingServiceCreateTopUpCheckoutEmptyPack(t *testing.T) {
 	service := NewService(&stubCommerceProvider{code: ProviderCodePaddle})
-	_, err := service.CreateTopUpCheckout(context.Background(), "user@example.com", " ")
+	_, err := service.CreateTopUpCheckout(context.Background(), testCustomer("user@example.com"), " ")
 	require.ErrorIs(t, err, ErrBillingTopUpPackUnknown)
 }
 
@@ -1011,7 +1015,7 @@ func TestBillingServiceCreateTopUpCheckoutProviderError(t *testing.T) {
 		code:             ProviderCodePaddle,
 		topUpCheckoutErr: errors.New("provider error"),
 	}, stateRepo)
-	_, err := service.CreateTopUpCheckout(context.Background(), "user@example.com", "top_up")
+	_, err := service.CreateTopUpCheckout(context.Background(), testCustomer("user@example.com"), "top_up")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "billing.checkout.top_up")
 }
@@ -1155,10 +1159,10 @@ func (p *simpleCommerceProviderNoReconcile) PublicConfig() PublicConfig {
 func (p *simpleCommerceProviderNoReconcile) BuildUserSyncEvents(_ context.Context, _ string) ([]WebhookEvent, error) {
 	return nil, nil
 }
-func (p *simpleCommerceProviderNoReconcile) CreateSubscriptionCheckout(_ context.Context, _ string, _ string) (CheckoutSession, error) {
+func (p *simpleCommerceProviderNoReconcile) CreateSubscriptionCheckout(_ context.Context, _ CustomerContext, _ string) (CheckoutSession, error) {
 	return CheckoutSession{}, nil
 }
-func (p *simpleCommerceProviderNoReconcile) CreateTopUpCheckout(_ context.Context, _ string, _ string) (CheckoutSession, error) {
+func (p *simpleCommerceProviderNoReconcile) CreateTopUpCheckout(_ context.Context, _ CustomerContext, _ string) (CheckoutSession, error) {
 	return CheckoutSession{}, nil
 }
 func (p *simpleCommerceProviderNoReconcile) CreateCustomerPortalSession(_ context.Context, _ string) (PortalSession, error) {
@@ -1261,10 +1265,10 @@ func (p *stubCommerceProviderNoCheckoutStatus) PublicConfig() PublicConfig {
 func (p *stubCommerceProviderNoCheckoutStatus) BuildUserSyncEvents(context.Context, string) ([]WebhookEvent, error) {
 	return nil, nil
 }
-func (p *stubCommerceProviderNoCheckoutStatus) CreateSubscriptionCheckout(context.Context, string, string) (CheckoutSession, error) {
+func (p *stubCommerceProviderNoCheckoutStatus) CreateSubscriptionCheckout(context.Context, CustomerContext, string) (CheckoutSession, error) {
 	return CheckoutSession{}, nil
 }
-func (p *stubCommerceProviderNoCheckoutStatus) CreateTopUpCheckout(context.Context, string, string) (CheckoutSession, error) {
+func (p *stubCommerceProviderNoCheckoutStatus) CreateTopUpCheckout(context.Context, CustomerContext, string) (CheckoutSession, error) {
 	return CheckoutSession{}, nil
 }
 func (p *stubCommerceProviderNoCheckoutStatus) CreateCustomerPortalSession(context.Context, string) (PortalSession, error) {

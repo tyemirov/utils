@@ -104,6 +104,14 @@ func (client *stubStripeCommerceClient) ListSubscriptions(
 	return client.subscriptions, nil
 }
 
+func (client *stubStripeCommerceClient) ListCheckoutSessions(
+	_ context.Context,
+	customerID string,
+) ([]stripeCheckoutSessionWebhookData, error) {
+	client.receivedListCustomer = customerID
+	return []stripeCheckoutSessionWebhookData{}, nil
+}
+
 func TestStripeProviderCreateSubscriptionCheckout(t *testing.T) {
 	commerceClient := &stubStripeCommerceClient{
 		resolvedCustomerID: "cus_test_1",
@@ -118,7 +126,7 @@ func TestStripeProviderCreateSubscriptionCheckout(t *testing.T) {
 
 	checkoutSession, checkoutErr := provider.CreateSubscriptionCheckout(
 		context.Background(),
-		"User@Example.com",
+		testCustomer("User@Example.com"),
 		PlanCodePro,
 	)
 	require.NoError(t, checkoutErr)
@@ -154,7 +162,7 @@ func TestStripeProviderCreateTopUpCheckout(t *testing.T) {
 
 	checkoutSession, checkoutErr := provider.CreateTopUpCheckout(
 		context.Background(),
-		"buyer@example.com",
+		testCustomer("buyer@example.com"),
 		PackCodeTopUp,
 	)
 	require.NoError(t, checkoutErr)
@@ -913,19 +921,19 @@ func TestNewStripeProviderRejectsInvalidURLs(t *testing.T) {
 func TestStripeProviderCreateSubscriptionCheckoutErrors(t *testing.T) {
 	t.Run("nil client", func(t *testing.T) {
 		provider := &StripeProvider{}
-		_, err := provider.CreateSubscriptionCheckout(context.Background(), "user@example.com", PlanCodePro)
+		_, err := provider.CreateSubscriptionCheckout(context.Background(), testCustomer("user@example.com"), PlanCodePro)
 		require.ErrorIs(t, err, ErrStripeProviderClientUnavailable)
 	})
 
 	t.Run("empty email", func(t *testing.T) {
 		provider, _ := NewStripeProvider(testStripeProviderSettings(), &stubStripeVerifier{}, &stubStripeCommerceClient{})
-		_, err := provider.CreateSubscriptionCheckout(context.Background(), "  ", PlanCodePro)
+		_, err := provider.CreateSubscriptionCheckout(context.Background(), testCustomer("  "), PlanCodePro)
 		require.ErrorIs(t, err, ErrBillingUserEmailInvalid)
 	})
 
 	t.Run("unsupported plan", func(t *testing.T) {
 		provider, _ := NewStripeProvider(testStripeProviderSettings(), &stubStripeVerifier{}, &stubStripeCommerceClient{})
-		_, err := provider.CreateSubscriptionCheckout(context.Background(), "user@example.com", "enterprise")
+		_, err := provider.CreateSubscriptionCheckout(context.Background(), testCustomer("user@example.com"), "enterprise")
 		require.ErrorIs(t, err, ErrBillingPlanUnsupported)
 	})
 }
@@ -933,19 +941,19 @@ func TestStripeProviderCreateSubscriptionCheckoutErrors(t *testing.T) {
 func TestStripeProviderCreateTopUpCheckoutErrors(t *testing.T) {
 	t.Run("nil client", func(t *testing.T) {
 		provider := &StripeProvider{}
-		_, err := provider.CreateTopUpCheckout(context.Background(), "user@example.com", PackCodeTopUp)
+		_, err := provider.CreateTopUpCheckout(context.Background(), testCustomer("user@example.com"), PackCodeTopUp)
 		require.ErrorIs(t, err, ErrStripeProviderClientUnavailable)
 	})
 
 	t.Run("empty email", func(t *testing.T) {
 		provider, _ := NewStripeProvider(testStripeProviderSettings(), &stubStripeVerifier{}, &stubStripeCommerceClient{})
-		_, err := provider.CreateTopUpCheckout(context.Background(), "  ", PackCodeTopUp)
+		_, err := provider.CreateTopUpCheckout(context.Background(), testCustomer("  "), PackCodeTopUp)
 		require.ErrorIs(t, err, ErrBillingUserEmailInvalid)
 	})
 
 	t.Run("unknown pack", func(t *testing.T) {
 		provider, _ := NewStripeProvider(testStripeProviderSettings(), &stubStripeVerifier{}, &stubStripeCommerceClient{})
-		_, err := provider.CreateTopUpCheckout(context.Background(), "user@example.com", "unknown")
+		_, err := provider.CreateTopUpCheckout(context.Background(), testCustomer("user@example.com"), "unknown")
 		require.ErrorIs(t, err, ErrBillingTopUpPackUnknown)
 	})
 }
@@ -1234,7 +1242,7 @@ func TestStripeProviderCreateSubscriptionCheckoutClientError(t *testing.T) {
 		createdCheckoutID:  "",
 	}
 	provider, _ := NewStripeProvider(testStripeProviderSettings(), &stubStripeVerifier{}, commerceClient)
-	session, err := provider.CreateSubscriptionCheckout(context.Background(), "user@example.com", PlanCodePro)
+	session, err := provider.CreateSubscriptionCheckout(context.Background(), testCustomer("user@example.com"), PlanCodePro)
 	require.NoError(t, err)
 	require.Equal(t, "", session.TransactionID)
 }
@@ -1245,7 +1253,7 @@ func TestStripeProviderCreateTopUpCheckoutClientError(t *testing.T) {
 		createdCheckoutID:  "",
 	}
 	provider, _ := NewStripeProvider(testStripeProviderSettings(), &stubStripeVerifier{}, commerceClient)
-	session, err := provider.CreateTopUpCheckout(context.Background(), "user@example.com", PackCodeTopUp)
+	session, err := provider.CreateTopUpCheckout(context.Background(), testCustomer("user@example.com"), PackCodeTopUp)
 	require.NoError(t, err)
 	require.Equal(t, "", session.TransactionID)
 }
@@ -1322,7 +1330,7 @@ func TestStripeProviderCreateSubscriptionCheckoutResolveError(t *testing.T) {
 		resolveCustomerIDErr: errors.New("resolve error"),
 	}
 	provider, _ := NewStripeProvider(testStripeProviderSettings(), &stubStripeVerifier{}, commerceClient)
-	_, err := provider.CreateSubscriptionCheckout(context.Background(), "user@example.com", PlanCodePro)
+	_, err := provider.CreateSubscriptionCheckout(context.Background(), testCustomer("user@example.com"), PlanCodePro)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "billing.stripe.customer.resolve")
 }
@@ -1333,7 +1341,7 @@ func TestStripeProviderCreateSubscriptionCheckoutCheckoutError(t *testing.T) {
 		createCheckoutSessionErr: errors.New("checkout error"),
 	}
 	provider, _ := NewStripeProvider(testStripeProviderSettings(), &stubStripeVerifier{}, commerceClient)
-	_, err := provider.CreateSubscriptionCheckout(context.Background(), "user@example.com", PlanCodePro)
+	_, err := provider.CreateSubscriptionCheckout(context.Background(), testCustomer("user@example.com"), PlanCodePro)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "billing.stripe.checkout.subscription")
 }
@@ -1343,7 +1351,7 @@ func TestStripeProviderCreateTopUpCheckoutResolveError(t *testing.T) {
 		resolveCustomerIDErr: errors.New("resolve error"),
 	}
 	provider, _ := NewStripeProvider(testStripeProviderSettings(), &stubStripeVerifier{}, commerceClient)
-	_, err := provider.CreateTopUpCheckout(context.Background(), "user@example.com", PackCodeTopUp)
+	_, err := provider.CreateTopUpCheckout(context.Background(), testCustomer("user@example.com"), PackCodeTopUp)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "billing.stripe.customer.resolve")
 }
@@ -1354,7 +1362,7 @@ func TestStripeProviderCreateTopUpCheckoutCheckoutError(t *testing.T) {
 		createCheckoutSessionErr: errors.New("checkout error"),
 	}
 	provider, _ := NewStripeProvider(testStripeProviderSettings(), &stubStripeVerifier{}, commerceClient)
-	_, err := provider.CreateTopUpCheckout(context.Background(), "user@example.com", PackCodeTopUp)
+	_, err := provider.CreateTopUpCheckout(context.Background(), testCustomer("user@example.com"), PackCodeTopUp)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "billing.stripe.checkout.credits")
 }

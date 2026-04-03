@@ -7,20 +7,12 @@ import (
 	"fmt"
 	"net/url"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 )
 
 const (
 	stripeWebhookSignatureHeaderName = "Stripe-Signature"
-
-	stripeMetadataUserEmailKey    = "poodle_scanner_user_email"
-	stripeMetadataPurchaseKindKey = "poodle_scanner_purchase_kind"
-	stripeMetadataPlanCodeKey     = "poodle_scanner_plan_code"
-	stripeMetadataPackCodeKey     = "poodle_scanner_pack_code"
-	stripeMetadataPackCreditsKey  = "poodle_scanner_pack_credits"
-	stripeMetadataPriceIDKey      = "poodle_scanner_price_id"
 
 	stripePurchaseKindSubscription = PurchaseKindSubscription
 	stripePurchaseKindTopUpPack    = PurchaseKindTopUpPack
@@ -85,6 +77,8 @@ type StripeProviderSettings struct {
 	CheckoutSuccessURL         string
 	CheckoutCancelURL          string
 	PortalReturnURL            string
+	Plans                      []PlanCatalogItem
+	Packs                      []PackCatalogItem
 	ProMonthlyPriceID          string
 	PlusMonthlyPriceID         string
 	SubscriptionMonthlyCredits map[string]int64
@@ -112,9 +106,9 @@ type stripePackDefinition struct {
 	PriceCents int64
 }
 
-type stripeSubscriptionSyncEvent struct {
-	WebhookEvent
-	isActive bool
+type stripeInspectedSubscription struct {
+	payload    stripeSubscriptionWebhookData
+	normalized ProviderSubscription
 }
 
 type StripeSignatureVerifier interface {
@@ -129,6 +123,7 @@ type stripeCommerceClient interface {
 	GetCheckoutSession(context.Context, string) (stripeCheckoutSessionWebhookData, error)
 	CreateCustomerPortalURL(context.Context, stripePortalSessionInput) (string, error)
 	GetPrice(context.Context, string) (stripePriceResponse, error)
+	ListCheckoutSessions(context.Context, string) ([]stripeCheckoutSessionWebhookData, error)
 	ListSubscriptions(context.Context, string) ([]stripeSubscriptionWebhookData, error)
 }
 
@@ -144,10 +139,12 @@ type StripeProvider struct {
 	packs              map[string]stripePackDefinition
 }
 
+var newStripeAPIClientFunc = newStripeAPIClient
+
 func NewStripeProvider(
 	settings StripeProviderSettings,
 	verifier StripeSignatureVerifier,
-	client stripeCommerceClient,
+	client StripeCommerceClient,
 ) (*StripeProvider, error) {
 	if verifier == nil {
 		return nil, ErrStripeProviderVerifierUnavailable
@@ -182,131 +179,93 @@ func NewStripeProvider(
 	if portalReturnURLErr != nil {
 		return nil, portalReturnURLErr
 	}
-
-	planCreditsByCode := make(map[string]int64, len(settings.SubscriptionMonthlyCredits))
-	for rawPlanCode, rawPlanCredits := range settings.SubscriptionMonthlyCredits {
-		normalizedPlanCode := strings.ToLower(strings.TrimSpace(rawPlanCode))
+	planDefinitions := make(map[string]stripePlanDefinition)
+	for _, item := range buildStripePlanCatalogItems(settings) {
+		normalizedPlanCode := strings.ToLower(strings.TrimSpace(item.Code))
 		if normalizedPlanCode == "" {
 			continue
 		}
-		if rawPlanCredits <= 0 {
+		if strings.TrimSpace(item.PriceID) == "" {
+			return nil, fmt.Errorf("%w: %s", ErrStripeProviderPriceIDEmpty, normalizedPlanCode)
+		}
+		if item.MonthlyCredits <= 0 {
+			if len(settings.Plans) == 0 {
+				if _, hasConfiguredCredits := settings.SubscriptionMonthlyCredits[normalizedPlanCode]; !hasConfiguredCredits {
+					return nil, fmt.Errorf("%w: %s", ErrStripeProviderPlanCreditsMissing, normalizedPlanCode)
+				}
+			}
 			return nil, fmt.Errorf("%w: %s", ErrStripeProviderPlanCreditsInvalid, normalizedPlanCode)
 		}
-		planCreditsByCode[normalizedPlanCode] = rawPlanCredits
-	}
-	planPricesByCode := make(map[string]int64, len(settings.SubscriptionMonthlyPrices))
-	for rawPlanCode, rawPlanPrice := range settings.SubscriptionMonthlyPrices {
-		normalizedPlanCode := strings.ToLower(strings.TrimSpace(rawPlanCode))
-		if normalizedPlanCode == "" {
-			continue
-		}
-		if rawPlanPrice <= 0 {
+		if item.PriceCents <= 0 {
+			if len(settings.Plans) == 0 {
+				if _, hasConfiguredPrice := settings.SubscriptionMonthlyPrices[normalizedPlanCode]; !hasConfiguredPrice {
+					return nil, fmt.Errorf("%w: %s", ErrStripeProviderPlanPriceMissing, normalizedPlanCode)
+				}
+			}
 			return nil, fmt.Errorf("%w: %s", ErrStripeProviderPlanPriceInvalid, normalizedPlanCode)
 		}
-		planPricesByCode[normalizedPlanCode] = rawPlanPrice
-	}
-	planDefinitions := map[string]stripePlanDefinition{
-		PlanCodePro: {
+		planDefinitions[normalizedPlanCode] = stripePlanDefinition{
 			Plan: SubscriptionPlan{
-				Code:          PlanCodePro,
-				Label:         stripePlanProLabel,
-				BillingPeriod: stripeBillingPeriodMonthly,
+				Code:           normalizedPlanCode,
+				Label:          firstNonEmptyString(item.Label, defaultStripePlanLabel(normalizedPlanCode)),
+				MonthlyCredits: item.MonthlyCredits,
+				PriceDisplay:   formatUSDPriceCents(item.PriceCents),
+				BillingPeriod:  stripeBillingPeriodMonthly,
 			},
-			PriceID: strings.TrimSpace(settings.ProMonthlyPriceID),
-		},
-		PlanCodePlus: {
-			Plan: SubscriptionPlan{
-				Code:          PlanCodePlus,
-				Label:         stripePlanPlusLabel,
-				BillingPeriod: stripeBillingPeriodMonthly,
-			},
-			PriceID: strings.TrimSpace(settings.PlusMonthlyPriceID),
-		},
-	}
-	for planCode, definition := range planDefinitions {
-		if definition.PriceID == "" {
-			return nil, fmt.Errorf("%w: %s", ErrStripeProviderPriceIDEmpty, planCode)
+			PriceID:    strings.TrimSpace(item.PriceID),
+			PriceCents: item.PriceCents,
 		}
-		planCredits, hasPlanCredits := planCreditsByCode[planCode]
-		if !hasPlanCredits {
-			return nil, fmt.Errorf("%w: %s", ErrStripeProviderPlanCreditsMissing, planCode)
-		}
-		definition.Plan.MonthlyCredits = planCredits
-		planPrice, hasPlanPrice := planPricesByCode[planCode]
-		if !hasPlanPrice {
-			return nil, fmt.Errorf("%w: %s", ErrStripeProviderPlanPriceMissing, planCode)
-		}
-		definition.Plan.PriceDisplay = formatUSDPriceCents(planPrice)
-		definition.PriceCents = planPrice
-		planDefinitions[planCode] = definition
 	}
 
-	packCreditsByCode := make(map[string]int64, len(settings.TopUpPackCredits))
-	for rawPackCode, rawPackCredits := range settings.TopUpPackCredits {
-		normalizedPackCode := NormalizePackCode(rawPackCode)
+	packDefinitions := make(map[string]stripePackDefinition)
+	for _, item := range buildStripePackCatalogItems(settings) {
+		normalizedPackCode := NormalizePackCode(item.Code)
 		if normalizedPackCode == "" {
 			continue
 		}
-		if rawPackCredits <= 0 {
-			return nil, fmt.Errorf("%w: %s", ErrStripeProviderPackCreditsInvalid, normalizedPackCode)
-		}
-		packCreditsByCode[normalizedPackCode] = rawPackCredits
-	}
-	packPricesByCode := make(map[string]int64, len(settings.TopUpPackPrices))
-	for rawPackCode, rawPackPrice := range settings.TopUpPackPrices {
-		normalizedPackCode := NormalizePackCode(rawPackCode)
-		if normalizedPackCode == "" {
-			continue
-		}
-		if rawPackPrice <= 0 {
-			return nil, fmt.Errorf("%w: %s", ErrStripeProviderPackPriceInvalid, normalizedPackCode)
-		}
-		packPricesByCode[normalizedPackCode] = rawPackPrice
-	}
-
-	packDefinitions := make(map[string]stripePackDefinition, len(settings.TopUpPackPriceIDs))
-	for rawPackCode, rawPriceID := range settings.TopUpPackPriceIDs {
-		normalizedPackCode := NormalizePackCode(rawPackCode)
-		if normalizedPackCode == "" {
-			continue
-		}
-		normalizedPriceID := strings.TrimSpace(rawPriceID)
-		if normalizedPriceID == "" {
+		if strings.TrimSpace(item.PriceID) == "" {
+			if len(settings.Packs) == 0 {
+				if _, hasConfiguredPriceID := settings.TopUpPackPriceIDs[normalizedPackCode]; !hasConfiguredPriceID {
+					return nil, fmt.Errorf("%w: %s", ErrStripeProviderPackPriceIDMissing, normalizedPackCode)
+				}
+			}
 			return nil, fmt.Errorf("%w: %s", ErrStripeProviderPriceIDEmpty, normalizedPackCode)
 		}
-		packCredits, hasPackCredits := packCreditsByCode[normalizedPackCode]
-		if !hasPackCredits {
-			return nil, fmt.Errorf("%w: %s", ErrStripeProviderPackCreditsMissing, normalizedPackCode)
+		if item.Credits <= 0 {
+			if len(settings.Packs) == 0 {
+				if _, hasConfiguredCredits := settings.TopUpPackCredits[normalizedPackCode]; !hasConfiguredCredits {
+					return nil, fmt.Errorf("%w: %s", ErrStripeProviderPackCreditsMissing, normalizedPackCode)
+				}
+			}
+			return nil, fmt.Errorf("%w: %s", ErrStripeProviderPackCreditsInvalid, normalizedPackCode)
 		}
-		packPrice, hasPackPrice := packPricesByCode[normalizedPackCode]
-		if !hasPackPrice {
-			return nil, fmt.Errorf("%w: %s", ErrStripeProviderPackPriceMissing, normalizedPackCode)
-		}
-		packLabel := PackLabelForCode(normalizedPackCode)
-		if packLabel == "" {
-			packLabel = toTitle(normalizedPackCode)
+		if item.PriceCents <= 0 {
+			if len(settings.Packs) == 0 {
+				if _, hasConfiguredPrice := settings.TopUpPackPrices[normalizedPackCode]; !hasConfiguredPrice {
+					return nil, fmt.Errorf("%w: %s", ErrStripeProviderPackPriceMissing, normalizedPackCode)
+				}
+			}
+			return nil, fmt.Errorf("%w: %s", ErrStripeProviderPackPriceInvalid, normalizedPackCode)
 		}
 		packDefinitions[normalizedPackCode] = stripePackDefinition{
 			Pack: TopUpPack{
 				Code:          normalizedPackCode,
-				Label:         packLabel,
-				Credits:       packCredits,
-				PriceDisplay:  formatUSDPriceCents(packPrice),
+				Label:         firstNonEmptyString(item.Label, PackLabelForCode(normalizedPackCode), toTitle(normalizedPackCode)),
+				Credits:       item.Credits,
+				PriceDisplay:  formatUSDPriceCents(item.PriceCents),
 				BillingPeriod: stripeBillingPeriodOneTime,
 			},
-			PriceID:    normalizedPriceID,
-			PriceCents: packPrice,
-		}
-	}
-	for normalizedPackCode := range packCreditsByCode {
-		if _, hasPackDefinition := packDefinitions[normalizedPackCode]; !hasPackDefinition {
-			return nil, fmt.Errorf("%w: %s", ErrStripeProviderPackPriceIDMissing, normalizedPackCode)
+			PriceID:    strings.TrimSpace(item.PriceID),
+			PriceCents: item.PriceCents,
 		}
 	}
 
 	resolvedClient := client
 	if resolvedClient == nil {
-		clientInstance, _ := newStripeAPIClient(normalizedAPIKey, nil)
+		clientInstance, clientErr := newStripeAPIClientFunc(normalizedAPIKey, nil)
+		if clientErr != nil {
+			return nil, clientErr
+		}
 		resolvedClient = clientInstance
 	}
 
@@ -321,6 +280,75 @@ func NewStripeProvider(
 		plans:              planDefinitions,
 		packs:              packDefinitions,
 	}, nil
+}
+
+func buildStripePlanCatalogItems(settings StripeProviderSettings) []PlanCatalogItem {
+	if len(settings.Plans) > 0 {
+		return append([]PlanCatalogItem(nil), settings.Plans...)
+	}
+	items := make([]PlanCatalogItem, 0, 2)
+	appendLegacyPlan := func(code string, label string, priceID string) {
+		trimmedPriceID := strings.TrimSpace(priceID)
+		credits := settings.SubscriptionMonthlyCredits[code]
+		priceCents := settings.SubscriptionMonthlyPrices[code]
+		if trimmedPriceID == "" && credits == 0 && priceCents == 0 {
+			return
+		}
+		items = append(items, PlanCatalogItem{
+			Code:           code,
+			Label:          label,
+			PriceID:        trimmedPriceID,
+			MonthlyCredits: credits,
+			PriceCents:     priceCents,
+		})
+	}
+	appendLegacyPlan(PlanCodePro, stripePlanProLabel, settings.ProMonthlyPriceID)
+	appendLegacyPlan(PlanCodePlus, stripePlanPlusLabel, settings.PlusMonthlyPriceID)
+	return items
+}
+
+func buildStripePackCatalogItems(settings StripeProviderSettings) []PackCatalogItem {
+	if len(settings.Packs) > 0 {
+		return append([]PackCatalogItem(nil), settings.Packs...)
+	}
+	packCodes := make(map[string]struct{})
+	for rawPackCode := range settings.TopUpPackPriceIDs {
+		packCodes[NormalizePackCode(rawPackCode)] = struct{}{}
+	}
+	for rawPackCode := range settings.TopUpPackCredits {
+		packCodes[NormalizePackCode(rawPackCode)] = struct{}{}
+	}
+	for rawPackCode := range settings.TopUpPackPrices {
+		packCodes[NormalizePackCode(rawPackCode)] = struct{}{}
+	}
+	items := make([]PackCatalogItem, 0, len(packCodes))
+	for packCode := range packCodes {
+		if packCode == "" {
+			continue
+		}
+		items = append(items, PackCatalogItem{
+			Code:       packCode,
+			Label:      firstNonEmptyString(PackLabelForCode(packCode), toTitle(packCode)),
+			PriceID:    strings.TrimSpace(settings.TopUpPackPriceIDs[packCode]),
+			Credits:    settings.TopUpPackCredits[packCode],
+			PriceCents: settings.TopUpPackPrices[packCode],
+		})
+	}
+	sort.SliceStable(items, func(leftIndex int, rightIndex int) bool {
+		return items[leftIndex].Code < items[rightIndex].Code
+	})
+	return items
+}
+
+func defaultStripePlanLabel(planCode string) string {
+	switch strings.ToLower(strings.TrimSpace(planCode)) {
+	case PlanCodePro:
+		return stripePlanProLabel
+	case PlanCodePlus:
+		return stripePlanPlusLabel
+	default:
+		return toTitle(planCode)
+	}
 }
 
 func normalizeStripeProviderURL(field string, rawURL string) (string, error) {
@@ -452,18 +480,26 @@ func (provider *StripeProvider) BuildUserSyncEvents(ctx context.Context, userEma
 		}
 		return []WebhookEvent{event}, nil
 	}
-	subscriptions, subscriptionsErr := provider.client.ListSubscriptions(ctx, customerID)
-	if subscriptionsErr != nil {
-		if errors.Is(subscriptionsErr, ErrStripeAPICustomerNotFound) {
-			event, eventErr := buildStripeInactiveSyncEvent(normalizedUserEmail, now)
-			if eventErr != nil {
-				return nil, eventErr
-			}
-			return []WebhookEvent{event}, nil
-		}
-		return nil, fmt.Errorf("billing.stripe.sync.subscription.list: %w", subscriptionsErr)
+	checkoutEvents, checkoutEventsErr := provider.buildUserCheckoutSyncEvents(ctx, customerID)
+	if checkoutEventsErr != nil {
+		return nil, checkoutEventsErr
 	}
-	return buildStripeSyncSubscriptionEvents(normalizedUserEmail, subscriptions, now)
+	inspectedSubscriptions, subscriptionsErr := provider.inspectCustomerSubscriptions(ctx, customerID)
+	if subscriptionsErr != nil {
+		return nil, subscriptionsErr
+	}
+	subscriptionEvents, subscriptionEventsErr := buildStripeSyncSubscriptionEventsFromInspected(
+		normalizedUserEmail,
+		inspectedSubscriptions,
+		now,
+	)
+	if subscriptionEventsErr != nil {
+		return nil, subscriptionEventsErr
+	}
+	syncEvents := make([]WebhookEvent, 0, len(checkoutEvents)+len(subscriptionEvents))
+	syncEvents = append(syncEvents, checkoutEvents...)
+	syncEvents = append(syncEvents, subscriptionEvents...)
+	return syncEvents, nil
 }
 
 func buildStripeSyncSubscriptionEvents(
@@ -471,57 +507,81 @@ func buildStripeSyncSubscriptionEvents(
 	subscriptions []stripeSubscriptionWebhookData,
 	now time.Time,
 ) ([]WebhookEvent, error) {
-	if len(subscriptions) == 0 {
-		event, eventErr := buildStripeInactiveSyncEvent(normalizedUserEmail, now)
-		if eventErr != nil {
-			return nil, eventErr
-		}
-		return []WebhookEvent{event}, nil
-	}
-	subscriptionEvents := make([]stripeSubscriptionSyncEvent, 0, len(subscriptions))
+	inspectedSubscriptions := make([]stripeInspectedSubscription, 0, len(subscriptions))
 	for _, subscription := range subscriptions {
 		subscriptionID := strings.TrimSpace(subscription.ID)
 		if subscriptionID == "" {
 			continue
 		}
-		payloadBytes, payloadErr := jsonMarshalFunc(stripeSubscriptionWebhookPayload{
-			Data: stripeSubscriptionWebhookPayloadData{
-				Object: subscription,
-			},
-		})
-		if payloadErr != nil {
-			return nil, fmt.Errorf("billing.stripe.sync.subscription.payload: %w", payloadErr)
-		}
-		occurredAt := parseStripeUnixTimestamp(subscription.CreatedAt)
-		if occurredAt.IsZero() {
-			return nil, ErrStripeWebhookPayloadInvalid
-		}
-		resolvedStatus := resolveStripeSubscriptionState(stripeEventTypeSubscriptionUpdated, subscription.Status)
-		subscriptionEvents = append(subscriptionEvents, stripeSubscriptionSyncEvent{
-			WebhookEvent: WebhookEvent{
-				ProviderCode: ProviderCodeStripe,
-				EventID: fmt.Sprintf(
-					"sync:subscription:%s:%s",
-					subscriptionID,
-					strings.ToLower(strings.TrimSpace(subscription.Status)),
-				),
-				EventType:  stripeEventTypeSubscriptionUpdated,
-				OccurredAt: occurredAt,
-				Payload:    payloadBytes,
-			},
-			isActive: resolvedStatus == subscriptionStatusActive,
+		inspectedSubscriptions = append(inspectedSubscriptions, stripeInspectedSubscription{
+			payload: subscription,
+			normalized: normalizeProviderSubscription(ProviderSubscription{
+				SubscriptionID: subscriptionID,
+				Status:         resolveStripeSubscriptionState(stripeEventTypeSubscriptionUpdated, subscription.Status),
+				ProviderStatus: subscription.Status,
+				NextBillingAt:  resolveStripeSubscriptionNextBillingAt(subscription),
+				OccurredAt:     parseStripeUnixTimestamp(subscription.CreatedAt),
+			}),
 		})
 	}
-	if len(subscriptionEvents) == 0 {
+	return buildStripeSyncSubscriptionEventsFromInspected(normalizedUserEmail, inspectedSubscriptions, now)
+}
+
+func buildStripeSyncSubscriptionEventsFromInspected(
+	normalizedUserEmail string,
+	inspectedSubscriptions []stripeInspectedSubscription,
+	now time.Time,
+) ([]WebhookEvent, error) {
+	if len(inspectedSubscriptions) == 0 {
 		event, eventErr := buildStripeInactiveSyncEvent(normalizedUserEmail, now)
 		if eventErr != nil {
 			return nil, eventErr
 		}
 		return []WebhookEvent{event}, nil
 	}
+	subscriptionEvents := make([]WebhookEvent, 0, len(inspectedSubscriptions))
+	for _, subscription := range inspectedSubscriptions {
+		payloadBytes, payloadErr := jsonMarshalFunc(stripeSubscriptionWebhookPayload{
+			Data: stripeSubscriptionWebhookPayloadData{
+				Object: subscription.payload,
+			},
+		})
+		if payloadErr != nil {
+			return nil, fmt.Errorf("billing.stripe.sync.subscription.payload: %w", payloadErr)
+		}
+		if subscription.normalized.SubscriptionID == "" {
+			continue
+		}
+		if subscription.normalized.OccurredAt.IsZero() {
+			return nil, ErrStripeWebhookPayloadInvalid
+		}
+		subscriptionEvents = append(subscriptionEvents, WebhookEvent{
+			ProviderCode: ProviderCodeStripe,
+			EventID: fmt.Sprintf(
+				"sync:subscription:%s:%s",
+				subscription.normalized.SubscriptionID,
+				subscription.normalized.ProviderStatus,
+			),
+			EventType:  stripeEventTypeSubscriptionUpdated,
+			OccurredAt: subscription.normalized.OccurredAt,
+			Payload:    payloadBytes,
+		})
+	}
 	sort.SliceStable(subscriptionEvents, func(leftIndex int, rightIndex int) bool {
-		if subscriptionEvents[leftIndex].isActive != subscriptionEvents[rightIndex].isActive {
-			return !subscriptionEvents[leftIndex].isActive
+		leftPayload := stripeSubscriptionWebhookPayload{}
+		rightPayload := stripeSubscriptionWebhookPayload{}
+		_ = json.Unmarshal(subscriptionEvents[leftIndex].Payload, &leftPayload)
+		_ = json.Unmarshal(subscriptionEvents[rightIndex].Payload, &rightPayload)
+		leftStatus := resolveStripeSubscriptionState(
+			stripeEventTypeSubscriptionUpdated,
+			leftPayload.Data.Object.Status,
+		)
+		rightStatus := resolveStripeSubscriptionState(
+			stripeEventTypeSubscriptionUpdated,
+			rightPayload.Data.Object.Status,
+		)
+		if leftStatus != rightStatus {
+			return leftStatus != subscriptionStatusActive
 		}
 		leftOccurredAt := subscriptionEvents[leftIndex].OccurredAt
 		rightOccurredAt := subscriptionEvents[rightIndex].OccurredAt
@@ -530,11 +590,81 @@ func buildStripeSyncSubscriptionEvents(
 		}
 		return leftOccurredAt.Before(rightOccurredAt)
 	})
-	resolvedEvents := make([]WebhookEvent, 0, len(subscriptionEvents))
-	for _, subscriptionEvent := range subscriptionEvents {
-		resolvedEvents = append(resolvedEvents, subscriptionEvent.WebhookEvent)
+	return subscriptionEvents, nil
+}
+
+func (provider *StripeProvider) InspectSubscriptions(
+	ctx context.Context,
+	userEmail string,
+) ([]ProviderSubscription, error) {
+	if provider == nil || provider.client == nil {
+		return nil, ErrStripeProviderClientUnavailable
 	}
-	return resolvedEvents, nil
+	normalizedUserEmail := strings.ToLower(strings.TrimSpace(userEmail))
+	if normalizedUserEmail == "" {
+		return nil, ErrBillingUserEmailInvalid
+	}
+	customerID, customerIDErr := provider.client.FindCustomerID(ctx, normalizedUserEmail)
+	if customerIDErr != nil {
+		return nil, fmt.Errorf("billing.stripe.customer.find: %w", customerIDErr)
+	}
+	if strings.TrimSpace(customerID) == "" {
+		return []ProviderSubscription{}, nil
+	}
+	inspectedSubscriptions, inspectErr := provider.inspectCustomerSubscriptions(ctx, customerID)
+	if inspectErr != nil {
+		return nil, inspectErr
+	}
+	resolvedSubscriptions := make([]ProviderSubscription, 0, len(inspectedSubscriptions))
+	for _, subscription := range inspectedSubscriptions {
+		resolvedSubscriptions = append(resolvedSubscriptions, subscription.normalized)
+	}
+	return resolvedSubscriptions, nil
+}
+
+func (provider *StripeProvider) buildUserCheckoutSyncEvents(
+	ctx context.Context,
+	customerID string,
+) ([]WebhookEvent, error) {
+	checkoutSessions, checkoutSessionsErr := provider.client.ListCheckoutSessions(ctx, customerID)
+	if checkoutSessionsErr != nil {
+		return nil, fmt.Errorf("billing.stripe.sync.checkout.list: %w", checkoutSessionsErr)
+	}
+	syncEvents := make([]WebhookEvent, 0, len(checkoutSessions))
+	for _, checkoutSession := range checkoutSessions {
+		checkoutSessionID := strings.TrimSpace(checkoutSession.ID)
+		if checkoutSessionID == "" || !isStripeCheckoutSessionPaid(checkoutSession) {
+			continue
+		}
+		payloadBytes, payloadErr := jsonMarshalFunc(stripeCheckoutSessionWebhookPayload{
+			Data: stripeCheckoutSessionWebhookPayloadData{
+				Object: checkoutSession,
+			},
+		})
+		if payloadErr != nil {
+			return nil, fmt.Errorf("billing.stripe.sync.checkout.payload: %w", payloadErr)
+		}
+		occurredAt := parseStripeUnixTimestamp(checkoutSession.CreatedAt)
+		if occurredAt.IsZero() {
+			return nil, ErrStripeWebhookPayloadInvalid
+		}
+		syncEvents = append(syncEvents, WebhookEvent{
+			ProviderCode: ProviderCodeStripe,
+			EventID:      fmt.Sprintf("sync:checkout:%s:completed", checkoutSessionID),
+			EventType:    stripeEventTypeCheckoutSessionCompleted,
+			OccurredAt:   occurredAt,
+			Payload:      payloadBytes,
+		})
+	}
+	sort.SliceStable(syncEvents, func(leftIndex int, rightIndex int) bool {
+		leftOccurredAt := syncEvents[leftIndex].OccurredAt
+		rightOccurredAt := syncEvents[rightIndex].OccurredAt
+		if leftOccurredAt.Equal(rightOccurredAt) {
+			return syncEvents[leftIndex].EventID < syncEvents[rightIndex].EventID
+		}
+		return leftOccurredAt.Before(rightOccurredAt)
+	})
+	return syncEvents, nil
 }
 
 func buildStripeInactiveSyncEvent(normalizedUserEmail string, occurredAt time.Time) (WebhookEvent, error) {
@@ -543,7 +673,8 @@ func buildStripeInactiveSyncEvent(normalizedUserEmail string, occurredAt time.Ti
 			Object: stripeSubscriptionWebhookData{
 				Status: stripeSubscriptionStatusCanceled,
 				Metadata: map[string]string{
-					stripeMetadataUserEmailKey: normalizedUserEmail,
+					billingMetadataUserEmailKey:      normalizedUserEmail,
+					stripeLegacyMetadataUserEmailKey: normalizedUserEmail,
 				},
 				CreatedAt: occurredAt.Unix(),
 			},
@@ -559,6 +690,50 @@ func buildStripeInactiveSyncEvent(normalizedUserEmail string, occurredAt time.Ti
 		OccurredAt:   occurredAt,
 		Payload:      payloadBytes,
 	}, nil
+}
+
+func (provider *StripeProvider) inspectCustomerSubscriptions(
+	ctx context.Context,
+	customerID string,
+) ([]stripeInspectedSubscription, error) {
+	subscriptions, subscriptionsErr := provider.client.ListSubscriptions(ctx, customerID)
+	if subscriptionsErr != nil {
+		if errors.Is(subscriptionsErr, ErrStripeAPICustomerNotFound) {
+			return []stripeInspectedSubscription{}, nil
+		}
+		return nil, fmt.Errorf("billing.stripe.sync.subscription.list: %w", subscriptionsErr)
+	}
+	planCodeByPriceID := buildStripePlanCodeByPriceID(provider.plans)
+	inspectedSubscriptions := make([]stripeInspectedSubscription, 0, len(subscriptions))
+	for _, subscription := range subscriptions {
+		subscriptionID := strings.TrimSpace(subscription.ID)
+		if subscriptionID == "" {
+			continue
+		}
+		planCode := strings.ToLower(
+			metadataValue(
+				subscription.Metadata,
+				billingMetadataPlanCodeKey,
+				stripeLegacyMetadataPlanCodeKey,
+			),
+		)
+		if planCode == "" {
+			priceID := resolveStripeSubscriptionPriceID(subscription)
+			planCode = strings.ToLower(strings.TrimSpace(planCodeByPriceID[priceID]))
+		}
+		inspectedSubscriptions = append(inspectedSubscriptions, stripeInspectedSubscription{
+			payload: subscription,
+			normalized: normalizeProviderSubscription(ProviderSubscription{
+				SubscriptionID: subscriptionID,
+				PlanCode:       planCode,
+				Status:         resolveStripeSubscriptionState(stripeEventTypeSubscriptionUpdated, subscription.Status),
+				ProviderStatus: subscription.Status,
+				NextBillingAt:  resolveStripeSubscriptionNextBillingAt(subscription),
+				OccurredAt:     parseStripeUnixTimestamp(subscription.CreatedAt),
+			}),
+		})
+	}
+	return inspectedSubscriptions, nil
 }
 
 func (provider *StripeProvider) ValidateCatalog(ctx context.Context) error {
@@ -608,13 +783,14 @@ func (provider *StripeProvider) ValidateCatalog(ctx context.Context) error {
 
 func (provider *StripeProvider) CreateSubscriptionCheckout(
 	ctx context.Context,
-	userEmail string,
+	customer CustomerContext,
 	planCode string,
 ) (CheckoutSession, error) {
 	if provider == nil || provider.client == nil {
 		return CheckoutSession{}, ErrStripeProviderClientUnavailable
 	}
-	normalizedUserEmail := strings.ToLower(strings.TrimSpace(userEmail))
+	normalizedCustomer := NormalizeCustomerContext(customer)
+	normalizedUserEmail := normalizedCustomer.Email
 	if normalizedUserEmail == "" {
 		return CheckoutSession{}, ErrBillingUserEmailInvalid
 	}
@@ -634,12 +810,7 @@ func (provider *StripeProvider) CreateSubscriptionCheckout(
 		Mode:       stripeCheckoutModeSubscription,
 		SuccessURL: provider.checkoutSuccessURL,
 		CancelURL:  provider.checkoutCancelURL,
-		Metadata: formatStripeMetadata(map[string]string{
-			stripeMetadataUserEmailKey:    normalizedUserEmail,
-			stripeMetadataPurchaseKindKey: stripePurchaseKindSubscription,
-			stripeMetadataPlanCodeKey:     planDefinition.Plan.Code,
-			stripeMetadataPriceIDKey:      planDefinition.PriceID,
-		}),
+		Metadata:   formatStripeMetadata(buildCheckoutMetadata(normalizedCustomer, stripePurchaseKindSubscription, planDefinition.Plan.Code, 0, planDefinition.PriceID)),
 	})
 	if checkoutSessionErr != nil {
 		return CheckoutSession{}, fmt.Errorf("billing.stripe.checkout.subscription: %w", checkoutSessionErr)
@@ -653,13 +824,14 @@ func (provider *StripeProvider) CreateSubscriptionCheckout(
 
 func (provider *StripeProvider) CreateTopUpCheckout(
 	ctx context.Context,
-	userEmail string,
+	customer CustomerContext,
 	packCode string,
 ) (CheckoutSession, error) {
 	if provider == nil || provider.client == nil {
 		return CheckoutSession{}, ErrStripeProviderClientUnavailable
 	}
-	normalizedUserEmail := strings.ToLower(strings.TrimSpace(userEmail))
+	normalizedCustomer := NormalizeCustomerContext(customer)
+	normalizedUserEmail := normalizedCustomer.Email
 	if normalizedUserEmail == "" {
 		return CheckoutSession{}, ErrBillingUserEmailInvalid
 	}
@@ -679,13 +851,7 @@ func (provider *StripeProvider) CreateTopUpCheckout(
 		Mode:       stripeCheckoutModePayment,
 		SuccessURL: provider.checkoutSuccessURL,
 		CancelURL:  provider.checkoutCancelURL,
-		Metadata: formatStripeMetadata(map[string]string{
-			stripeMetadataUserEmailKey:    normalizedUserEmail,
-			stripeMetadataPurchaseKindKey: stripePurchaseKindTopUpPack,
-			stripeMetadataPackCodeKey:     packDefinition.Pack.Code,
-			stripeMetadataPackCreditsKey:  strconv.FormatInt(packDefinition.Pack.Credits, 10),
-			stripeMetadataPriceIDKey:      packDefinition.PriceID,
-		}),
+		Metadata:   formatStripeMetadata(buildCheckoutMetadata(normalizedCustomer, stripePurchaseKindTopUpPack, packDefinition.Pack.Code, packDefinition.Pack.Credits, packDefinition.PriceID)),
 	})
 	if checkoutSessionErr != nil {
 		return CheckoutSession{}, fmt.Errorf("billing.stripe.checkout.credits: %w", checkoutSessionErr)
@@ -767,7 +933,14 @@ func (provider *StripeProvider) resolveCheckoutUserEmail(
 	ctx context.Context,
 	checkoutSession stripeCheckoutSessionWebhookData,
 ) (string, error) {
-	checkoutUserEmail := strings.ToLower(strings.TrimSpace(checkoutSession.Metadata[stripeMetadataUserEmailKey]))
+	checkoutUserEmail := strings.ToLower(
+		metadataValue(
+			checkoutSession.Metadata,
+			billingMetadataUserEmailKey,
+			stripeLegacyMetadataUserEmailKey,
+			crosswordLegacyMetadataUserEmailKey,
+		),
+	)
 	if checkoutUserEmail == "" {
 		checkoutUserEmail = strings.ToLower(strings.TrimSpace(checkoutSession.CustomerEmail))
 	}

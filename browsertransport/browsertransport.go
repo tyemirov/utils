@@ -922,6 +922,10 @@ func (forwarder *socksForwarder) handleConnection(clientConnection net.Conn) {
 const defaultChromeVersion = "130"
 
 var chromeVersionPattern = regexp.MustCompile(`(\d+)\.\d+\.\d+\.\d+`)
+var detectChromeVersionGOOS = runtime.GOOS
+var chromeVersionCommandOutput = func(candidate string) ([]byte, error) {
+	return exec.Command(candidate, "--version").Output()
+}
 
 // DetectChromeVersion returns the major version of the Chrome binary at
 // execPath, or tries common platform paths when execPath is empty.
@@ -929,7 +933,7 @@ var chromeVersionPattern = regexp.MustCompile(`(\d+)\.\d+\.\d+\.\d+`)
 func DetectChromeVersion(execPath string) string {
 	candidates := []string{execPath}
 	if strings.TrimSpace(execPath) == "" {
-		if runtime.GOOS == "darwin" {
+		if detectChromeVersionGOOS == "darwin" {
 			candidates = []string{"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"}
 		} else {
 			candidates = []string{"google-chrome", "google-chrome-stable", "chromium-browser", "chromium"}
@@ -937,10 +941,7 @@ func DetectChromeVersion(execPath string) string {
 	}
 
 	for _, candidate := range candidates {
-		if candidate == "" {
-			continue
-		}
-		output, err := exec.Command(candidate, "--version").Output()
+		output, err := chromeVersionCommandOutput(candidate)
 		if err != nil {
 			continue
 		}

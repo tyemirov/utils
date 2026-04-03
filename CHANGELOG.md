@@ -1,5 +1,32 @@
 # Changelog
 
+## [v0.12.0] - 2026-04-03
+
+### Features ✨
+- Generalize the shared `billing` package to support data-driven plan and pack catalogs across products.
+- Add `CustomerContext` and subject-aware billing metadata so checkout and webhook flows can carry both email and stable app subject IDs.
+- Support pack-only billing products and configurable top-up eligibility policies in the shared billing service.
+- Export shared billing compatibility types and metadata helpers for app-specific adapters.
+
+### Improvements ⚙️
+- Unify Paddle and Stripe checkout metadata generation, subscription inspection, and reconcile helpers around the shared billing core.
+- Add subscription inspection helpers for canonical provider-state selection and active-subscription detection.
+- Preserve compatibility with legacy billing metadata keys used by existing Poodle Scanner and LLM Crossword flows.
+- Make Chrome version and default user-agent detection in `browsertransport` directly testable without changing runtime behavior.
+
+### Bug Fixes 🐛
+- Simplify Paddle timestamp parsing to rely on the Go RFC3339 parser’s native fractional-second support.
+- Remove an unreachable shared billing HTTP error mapping branch tied to legacy compatibility aliases.
+- Tighten Stripe checkout-sync ordering coverage around timestamp and event-id sorting paths.
+
+### Testing 🧪
+- Restore `billing` package coverage to 100% with focused tests for generalized catalog handling, inspection paths, shared service policies, and sync/reconcile helpers.
+- Restore `browsertransport` package coverage to 100% with direct tests for Chrome-version detection and user-agent fallback behavior.
+- Add direct Stripe checkout-session list coverage for pagination, request failures, and cursor validation.
+
+### Docs 📚
+- _No changes._
+
 ## [v0.10.0] - 2026-03-28
 
 ### Features ✨

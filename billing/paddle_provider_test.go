@@ -274,7 +274,7 @@ func TestPaddleProviderSubscriptionCheckout(t *testing.T) {
 	provider, err := NewPaddleProvider(testPaddleProviderSettings(), &stubPaddleVerifier{}, client)
 	require.NoError(t, err)
 
-	session, checkoutErr := provider.CreateSubscriptionCheckout(context.Background(), "user@example.com", PlanCodePro)
+	session, checkoutErr := provider.CreateSubscriptionCheckout(context.Background(), testCustomer("user@example.com"), PlanCodePro)
 	require.NoError(t, checkoutErr)
 	require.Equal(t, ProviderCodePaddle, session.ProviderCode)
 	require.Equal(t, "txn_123", session.TransactionID)
@@ -318,7 +318,7 @@ func TestPaddleProviderSubscriptionCheckoutRejectsUnknownPlan(t *testing.T) {
 	provider, err := NewPaddleProvider(testPaddleProviderSettings(), &stubPaddleVerifier{}, &stubPaddleCommerceClient{})
 	require.NoError(t, err)
 
-	_, checkoutErr := provider.CreateSubscriptionCheckout(context.Background(), "user@example.com", "enterprise")
+	_, checkoutErr := provider.CreateSubscriptionCheckout(context.Background(), testCustomer("user@example.com"), "enterprise")
 	require.ErrorIs(t, checkoutErr, ErrBillingPlanUnsupported)
 }
 
@@ -330,7 +330,7 @@ func TestPaddleProviderTopUpCheckout(t *testing.T) {
 	provider, err := NewPaddleProvider(testPaddleProviderSettings(), &stubPaddleVerifier{}, client)
 	require.NoError(t, err)
 
-	session, checkoutErr := provider.CreateTopUpCheckout(context.Background(), "user@example.com", PackCodeTopUp)
+	session, checkoutErr := provider.CreateTopUpCheckout(context.Background(), testCustomer("user@example.com"), PackCodeTopUp)
 	require.NoError(t, checkoutErr)
 	require.Equal(t, ProviderCodePaddle, session.ProviderCode)
 	require.Equal(t, "txn_credits", session.TransactionID)
@@ -344,7 +344,7 @@ func TestPaddleProviderTopUpCheckoutRejectsUnknownPack(t *testing.T) {
 	provider, err := NewPaddleProvider(testPaddleProviderSettings(), &stubPaddleVerifier{}, &stubPaddleCommerceClient{})
 	require.NoError(t, err)
 
-	_, checkoutErr := provider.CreateTopUpCheckout(context.Background(), "user@example.com", "unknown")
+	_, checkoutErr := provider.CreateTopUpCheckout(context.Background(), testCustomer("user@example.com"), "unknown")
 	require.ErrorIs(t, checkoutErr, ErrBillingTopUpPackUnknown)
 }
 
@@ -918,25 +918,25 @@ func TestPaddleProviderBuildCheckoutReconcileEventEmptyTransactionID(t *testing.
 
 func TestPaddleProviderCreateSubscriptionCheckoutNilClient(t *testing.T) {
 	provider := &PaddleProvider{}
-	_, err := provider.CreateSubscriptionCheckout(context.Background(), "user@example.com", PlanCodePro)
+	_, err := provider.CreateSubscriptionCheckout(context.Background(), testCustomer("user@example.com"), PlanCodePro)
 	require.ErrorIs(t, err, ErrPaddleProviderClientUnavailable)
 }
 
 func TestPaddleProviderCreateSubscriptionCheckoutEmptyEmail(t *testing.T) {
 	provider, _ := NewPaddleProvider(testPaddleProviderSettings(), &stubPaddleVerifier{}, &stubPaddleCommerceClient{})
-	_, err := provider.CreateSubscriptionCheckout(context.Background(), "  ", PlanCodePro)
+	_, err := provider.CreateSubscriptionCheckout(context.Background(), testCustomer("  "), PlanCodePro)
 	require.ErrorIs(t, err, ErrBillingUserEmailInvalid)
 }
 
 func TestPaddleProviderCreateTopUpCheckoutNilClient(t *testing.T) {
 	provider := &PaddleProvider{}
-	_, err := provider.CreateTopUpCheckout(context.Background(), "user@example.com", PackCodeTopUp)
+	_, err := provider.CreateTopUpCheckout(context.Background(), testCustomer("user@example.com"), PackCodeTopUp)
 	require.ErrorIs(t, err, ErrPaddleProviderClientUnavailable)
 }
 
 func TestPaddleProviderCreateTopUpCheckoutEmptyEmail(t *testing.T) {
 	provider, _ := NewPaddleProvider(testPaddleProviderSettings(), &stubPaddleVerifier{}, &stubPaddleCommerceClient{})
-	_, err := provider.CreateTopUpCheckout(context.Background(), "  ", PackCodeTopUp)
+	_, err := provider.CreateTopUpCheckout(context.Background(), testCustomer("  "), PackCodeTopUp)
 	require.ErrorIs(t, err, ErrBillingUserEmailInvalid)
 }
 
@@ -1110,7 +1110,7 @@ func TestPaddleProviderCreateSubscriptionCheckoutResolveError(t *testing.T) {
 		resolveCustomerErr: errors.New("resolve error"),
 	}
 	provider, _ := NewPaddleProvider(testPaddleProviderSettings(), &stubPaddleVerifier{}, client)
-	_, err := provider.CreateSubscriptionCheckout(context.Background(), "user@example.com", PlanCodePro)
+	_, err := provider.CreateSubscriptionCheckout(context.Background(), testCustomer("user@example.com"), PlanCodePro)
 	require.Error(t, err)
 }
 
@@ -1119,7 +1119,7 @@ func TestPaddleProviderCreateTopUpCheckoutResolveError(t *testing.T) {
 		resolveCustomerErr: errors.New("resolve error"),
 	}
 	provider, _ := NewPaddleProvider(testPaddleProviderSettings(), &stubPaddleVerifier{}, client)
-	_, err := provider.CreateTopUpCheckout(context.Background(), "user@example.com", PackCodeTopUp)
+	_, err := provider.CreateTopUpCheckout(context.Background(), testCustomer("user@example.com"), PackCodeTopUp)
 	require.Error(t, err)
 }
 
@@ -1138,7 +1138,7 @@ func TestPaddleProviderCreateSubscriptionCheckoutTransactionError(t *testing.T) 
 		createTransactionErr: errors.New("txn error"),
 	}
 	provider, _ := NewPaddleProvider(testPaddleProviderSettings(), &stubPaddleVerifier{}, client)
-	_, err := provider.CreateSubscriptionCheckout(context.Background(), "user@example.com", PlanCodePro)
+	_, err := provider.CreateSubscriptionCheckout(context.Background(), testCustomer("user@example.com"), PlanCodePro)
 	require.Error(t, err)
 }
 
@@ -1148,7 +1148,7 @@ func TestPaddleProviderCreateTopUpCheckoutTransactionError(t *testing.T) {
 		createTransactionErr: errors.New("txn error"),
 	}
 	provider, _ := NewPaddleProvider(testPaddleProviderSettings(), &stubPaddleVerifier{}, client)
-	_, err := provider.CreateTopUpCheckout(context.Background(), "user@example.com", PackCodeTopUp)
+	_, err := provider.CreateTopUpCheckout(context.Background(), testCustomer("user@example.com"), PackCodeTopUp)
 	require.Error(t, err)
 }
 

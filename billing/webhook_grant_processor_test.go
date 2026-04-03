@@ -80,7 +80,7 @@ func (provider unsupportedWebhookGrantResolverProvider) BuildUserSyncEvents(
 
 func (provider unsupportedWebhookGrantResolverProvider) CreateSubscriptionCheckout(
 	context.Context,
-	string,
+	CustomerContext,
 	string,
 ) (CheckoutSession, error) {
 	return CheckoutSession{}, nil
@@ -88,7 +88,7 @@ func (provider unsupportedWebhookGrantResolverProvider) CreateSubscriptionChecko
 
 func (provider unsupportedWebhookGrantResolverProvider) CreateTopUpCheckout(
 	context.Context,
-	string,
+	CustomerContext,
 	string,
 ) (CheckoutSession, error) {
 	return CheckoutSession{}, nil

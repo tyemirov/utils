@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -219,12 +220,30 @@ func (resolver *stripeWebhookGrantResolver) Resolve(
 	}
 
 	priceID := strings.TrimSpace(checkoutSession.Metadata[stripeMetadataPriceIDKey])
+	if priceID == "" {
+		priceID = metadataValue(
+			checkoutSession.Metadata,
+			billingMetadataPriceIDKey,
+			stripeLegacyMetadataPriceIDKey,
+		)
+	}
+	subjectID := metadataValue(
+		checkoutSession.Metadata,
+		billingMetadataSubjectIDKey,
+		crosswordLegacyMetadataSubjectIDKey,
+	)
 	userEmail, userEmailErr := resolver.resolveUserEmail(ctx, checkoutSession)
 	if userEmailErr != nil {
 		return WebhookGrant{}, false, userEmailErr
 	}
 
-	purchaseKind := NormalizePurchaseKind(checkoutSession.Metadata[stripeMetadataPurchaseKindKey])
+	purchaseKind := NormalizePurchaseKind(
+		metadataValue(
+			checkoutSession.Metadata,
+			billingMetadataPurchaseKindKey,
+			stripeLegacyMetadataPurchaseKindKey,
+		),
+	)
 	if purchaseKind == "" {
 		switch strings.ToLower(strings.TrimSpace(checkoutSession.Mode)) {
 		case stripeCheckoutModeSubscriptionRaw:
@@ -242,7 +261,13 @@ func (resolver *stripeWebhookGrantResolver) Resolve(
 
 	switch purchaseKind {
 	case stripePurchaseKindSubscription:
-		planCode := strings.ToLower(strings.TrimSpace(checkoutSession.Metadata[stripeMetadataPlanCodeKey]))
+		planCode := strings.ToLower(
+			metadataValue(
+				checkoutSession.Metadata,
+				billingMetadataPlanCodeKey,
+				stripeLegacyMetadataPlanCodeKey,
+			),
+		)
 		if planCode == "" {
 			planGrantDefinition, hasPlanGrantDefinition := resolver.planGrantByPriceID[priceID]
 			if hasPlanGrantDefinition {
@@ -276,22 +301,30 @@ func (resolver *stripeWebhookGrantResolver) Resolve(
 		}
 		return WebhookGrant{
 			UserEmail: userEmail,
+			SubjectID: subjectID,
 			Credits:   planCredits,
 			Reason:    reason,
 			Reference: reference,
 			Metadata:  metadata,
 		}, true, nil
 	case stripePurchaseKindTopUpPack:
-		packCode := NormalizePackCode(checkoutSession.Metadata[stripeMetadataPackCodeKey])
+		packCode := NormalizePackCode(
+			metadataValue(
+				checkoutSession.Metadata,
+				billingMetadataPackCodeKey,
+				stripeLegacyMetadataPackCodeKey,
+			),
+		)
 		if packCode == "" {
 			packGrantDefinition, hasPackGrantDefinition := resolver.packGrantByPriceID[priceID]
 			if hasPackGrantDefinition {
 				packCode = packGrantDefinition.Code
 			}
 		}
-		packCreditsFromMetadata, packCreditsMetadataErr := parseStripeMetadataInt64(
+		packCreditsFromMetadata, packCreditsMetadataErr := parseStripeWebhookMetadataInt64(
 			checkoutSession.Metadata,
-			stripeMetadataPackCreditsKey,
+			billingMetadataPackCreditsKey,
+			stripeLegacyMetadataPackCreditsKey,
 		)
 		if packCreditsMetadataErr != nil {
 			return WebhookGrant{}, false, packCreditsMetadataErr
@@ -331,6 +364,7 @@ func (resolver *stripeWebhookGrantResolver) Resolve(
 		}
 		return WebhookGrant{
 			UserEmail: userEmail,
+			SubjectID: subjectID,
 			Credits:   packCredits,
 			Reason:    reason,
 			Reference: reference,
@@ -345,7 +379,14 @@ func (resolver *stripeWebhookGrantResolver) resolveUserEmail(
 	ctx context.Context,
 	checkoutSession stripeCheckoutSessionWebhookData,
 ) (string, error) {
-	userEmail := strings.ToLower(strings.TrimSpace(checkoutSession.Metadata[stripeMetadataUserEmailKey]))
+	userEmail := strings.ToLower(
+		metadataValue(
+			checkoutSession.Metadata,
+			billingMetadataUserEmailKey,
+			stripeLegacyMetadataUserEmailKey,
+			crosswordLegacyMetadataUserEmailKey,
+		),
+	)
 	if userEmail != "" {
 		return userEmail, nil
 	}
@@ -591,7 +632,13 @@ func (processor *stripeSubscriptionStatusWebhookProcessor) resolvePayloadUserEma
 	ctx context.Context,
 	subscriptionData stripeSubscriptionWebhookData,
 ) (string, error) {
-	userEmail := strings.ToLower(strings.TrimSpace(subscriptionData.Metadata[stripeMetadataUserEmailKey]))
+	userEmail := strings.ToLower(
+		metadataValue(
+			subscriptionData.Metadata,
+			billingMetadataUserEmailKey,
+			stripeLegacyMetadataUserEmailKey,
+		),
+	)
 	if userEmail != "" {
 		return userEmail, nil
 	}
@@ -613,7 +660,13 @@ func (processor *stripeSubscriptionStatusWebhookProcessor) resolvePayloadUserEma
 func (processor *stripeSubscriptionStatusWebhookProcessor) resolvePlanCode(
 	subscriptionData stripeSubscriptionWebhookData,
 ) string {
-	planCode := strings.ToLower(strings.TrimSpace(subscriptionData.Metadata[stripeMetadataPlanCodeKey]))
+	planCode := strings.ToLower(
+		metadataValue(
+			subscriptionData.Metadata,
+			billingMetadataPlanCodeKey,
+			stripeLegacyMetadataPlanCodeKey,
+		),
+	)
 	if planCode != "" {
 		return planCode
 	}
@@ -659,4 +712,16 @@ func resolveStripeSubscriptionState(eventType string, rawStatus string) string {
 
 func resolveStripeSubscriptionNextBillingAt(subscriptionData stripeSubscriptionWebhookData) time.Time {
 	return parseStripeUnixTimestamp(subscriptionData.CurrentPeriodEnd)
+}
+
+func parseStripeWebhookMetadataInt64(metadata map[string]string, keys ...string) (int64, error) {
+	rawValue := metadataValue(metadata, keys...)
+	if rawValue == "" {
+		return 0, nil
+	}
+	parsedValue, parseErr := strconv.ParseInt(rawValue, 10, 64)
+	if parseErr != nil || parsedValue <= 0 {
+		return 0, ErrWebhookGrantMetadataInvalid
+	}
+	return parsedValue, nil
 }

@@ -82,6 +82,11 @@ type stripeListSubscriptionsResponse struct {
 	HasMore bool                            `json:"has_more"`
 }
 
+type stripeListCheckoutSessionsResponse struct {
+	Data    []stripeCheckoutSessionWebhookData `json:"data"`
+	HasMore bool                               `json:"has_more"`
+}
+
 type stripeCustomerResponse struct {
 	ID    string `json:"id"`
 	Email string `json:"email"`
@@ -313,6 +318,50 @@ func (client *stripeAPIClient) ListSubscriptions(
 		startingAfter = nextStartingAfter
 	}
 	return resolvedSubscriptions, nil
+}
+
+func (client *stripeAPIClient) ListCheckoutSessions(
+	ctx context.Context,
+	customerID string,
+) ([]stripeCheckoutSessionWebhookData, error) {
+	normalizedCustomerID := strings.TrimSpace(customerID)
+	if normalizedCustomerID == "" {
+		return []stripeCheckoutSessionWebhookData{}, nil
+	}
+
+	resolvedCheckoutSessions := make([]stripeCheckoutSessionWebhookData, 0)
+	startingAfter := ""
+	for {
+		formValues := url.Values{}
+		formValues.Set("customer", normalizedCustomerID)
+		formValues.Set("limit", "100")
+		if startingAfter != "" {
+			formValues.Set("starting_after", startingAfter)
+		}
+		responsePayload := stripeListCheckoutSessionsResponse{}
+		if requestErr := client.doFormRequest(
+			ctx,
+			http.MethodGet,
+			stripeCheckoutSessionsEndpointPath,
+			formValues,
+			&responsePayload,
+		); requestErr != nil {
+			return nil, requestErr
+		}
+		resolvedCheckoutSessions = append(resolvedCheckoutSessions, responsePayload.Data...)
+		if !responsePayload.HasMore {
+			break
+		}
+		if len(responsePayload.Data) == 0 {
+			return nil, ErrStripeAPIRequestFailed
+		}
+		nextStartingAfter := strings.TrimSpace(responsePayload.Data[len(responsePayload.Data)-1].ID)
+		if nextStartingAfter == "" {
+			return nil, ErrStripeAPIRequestFailed
+		}
+		startingAfter = nextStartingAfter
+	}
+	return resolvedCheckoutSessions, nil
 }
 
 func (client *stripeAPIClient) findCustomerIDByEmail(ctx context.Context, email string) (string, error) {
