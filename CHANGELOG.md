@@ -1,5 +1,23 @@
 # Changelog
 
+## [v0.12.1] - 2026-04-03
+
+### Features ✨
+- _No changes._
+
+### Improvements ⚙️
+- _No changes._
+
+### Bug Fixes 🐛
+- _No changes._
+
+### Testing 🧪
+- Add executable billing examples that exercise `Service` and `WebhookHandler` flows as part of the test suite.
+
+### Docs 📚
+- Expand package-level `billing` documentation with integration guidance and a clearer package-layer overview.
+- Add GoDoc comments for exported billing types, interfaces, constructors, and helpers.
+
 ## [v0.12.0] - 2026-04-03
 
 ### Features ✨
