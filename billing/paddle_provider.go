@@ -43,6 +43,8 @@ var (
 	ErrPaddleProviderClientUnavailable     = errors.New("billing.paddle.provider.client.unavailable")
 )
 
+// PaddleProviderSettings configures a Paddle-backed provider and its plan/pack
+// catalog.
 type PaddleProviderSettings struct {
 	Environment                string
 	APIBaseURL                 string
@@ -110,6 +112,7 @@ type paddleInspectedSubscription struct {
 	normalized ProviderSubscription
 }
 
+// PaddleSignatureVerifier verifies Paddle webhook signatures.
 type PaddleSignatureVerifier interface {
 	Verify(signatureHeader string, payload []byte) error
 }
@@ -123,6 +126,8 @@ type PaddleProvider struct {
 	packs       map[string]paddlePackDefinition
 }
 
+// NewPaddleProvider constructs a Paddle-backed Provider from application
+// settings and a webhook signature verifier.
 func NewPaddleProvider(
 	settings PaddleProviderSettings,
 	verifier PaddleSignatureVerifier,

@@ -17,11 +17,16 @@ const (
 	webhookMaxBodyBytes                int64 = 1024 * 1024
 )
 
+// WebhookHandler is an http.Handler that verifies signatures, parses provider
+// payloads, and forwards normalized events into a WebhookProcessor.
 type WebhookHandler struct {
 	Provider  WebhookProvider
 	Processor WebhookProcessor
 }
 
+// NewWebhookHandler builds a handler for provider webhooks. Non-retryable
+// processor failures are accepted and logged so providers do not retry events
+// that can never succeed.
 func NewWebhookHandler(provider WebhookProvider, processor WebhookProcessor) *WebhookHandler {
 	return &WebhookHandler{
 		Provider:  provider,

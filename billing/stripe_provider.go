@@ -70,6 +70,8 @@ const (
 	stripeSubscriptionStatusUnpaid            = "unpaid"
 )
 
+// StripeProviderSettings configures a Stripe-backed provider and its plan/pack
+// catalog.
 type StripeProviderSettings struct {
 	Environment                string
 	APIKey                     string
@@ -111,6 +113,7 @@ type stripeInspectedSubscription struct {
 	normalized ProviderSubscription
 }
 
+// StripeSignatureVerifier verifies Stripe webhook signatures.
 type StripeSignatureVerifier interface {
 	Verify(signatureHeader string, payload []byte) error
 }
@@ -141,6 +144,8 @@ type StripeProvider struct {
 
 var newStripeAPIClientFunc = newStripeAPIClient
 
+// NewStripeProvider constructs a Stripe-backed Provider from application
+// settings and a webhook signature verifier.
 func NewStripeProvider(
 	settings StripeProviderSettings,
 	verifier StripeSignatureVerifier,

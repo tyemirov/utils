@@ -13,6 +13,8 @@ const (
 	subscriptionStatusActive   = "active"
 )
 
+// SubscriptionSummary is the shared backend view of a user's current billing
+// state and the public catalog they can purchase from.
 type SubscriptionSummary struct {
 	ProviderCode        string
 	Enabled             bool
@@ -31,6 +33,9 @@ type SubscriptionSummary struct {
 	TopUpPacks          []TopUpPack
 }
 
+// Service coordinates app-facing billing operations on top of a shared
+// CommerceProvider, optional subscription-state persistence, and optional
+// webhook processing.
 type Service struct {
 	provider                    CommerceProvider
 	subscriptionStateRepository SubscriptionStateRepository
@@ -38,6 +43,9 @@ type Service struct {
 	topUpEligibilityPolicy      TopUpEligibilityPolicy
 }
 
+// NewService builds a Service for summary, checkout, portal, sync, and
+// reconcile operations. When a repository is provided, the service can persist
+// and query normalized subscription state.
 func NewService(provider CommerceProvider, subscriptionStateReaders ...SubscriptionStateRepository) *Service {
 	var subscriptionStateRepository SubscriptionStateRepository
 	if len(subscriptionStateReaders) > 0 {
@@ -51,6 +59,8 @@ func NewService(provider CommerceProvider, subscriptionStateReaders ...Subscript
 	}
 }
 
+// NewServiceWithWebhookProcessor is like NewService but also wires the
+// processor used by sync and reconcile flows.
 func NewServiceWithWebhookProcessor(
 	provider CommerceProvider,
 	webhookProcessor WebhookProcessor,
@@ -61,6 +71,8 @@ func NewServiceWithWebhookProcessor(
 	return service
 }
 
+// WithTopUpEligibilityPolicy overrides the shared top-up gating behavior and
+// returns the same service for fluent setup.
 func (service *Service) WithTopUpEligibilityPolicy(policy TopUpEligibilityPolicy) *Service {
 	if service == nil {
 		return nil
@@ -69,6 +81,7 @@ func (service *Service) WithTopUpEligibilityPolicy(policy TopUpEligibilityPolicy
 	return service
 }
 
+// ProviderCode returns the billing provider code for the configured service.
 func (service *Service) ProviderCode() string {
 	if service == nil || service.provider == nil {
 		return ""
@@ -84,6 +97,8 @@ var (
 	ErrBillingCheckoutOwnershipMismatch         = errors.New("billing.checkout.ownership.mismatch")
 )
 
+// GetSubscriptionSummary returns the caller's normalized subscription state and
+// public billing catalog. The state lookup is keyed by normalized user email.
 func (service *Service) GetSubscriptionSummary(ctx context.Context, userEmail string) (SubscriptionSummary, error) {
 	if service == nil || service.provider == nil {
 		return SubscriptionSummary{}, ErrBillingProviderUnavailable
@@ -163,6 +178,8 @@ func resolveSubscriptionDelinquency(providerStatus string, lastEventType string)
 	return false, ""
 }
 
+// SyncUserBillingEvents asks the provider for synthetic sync events for the
+// given user and replays them through the configured webhook processor.
 func (service *Service) SyncUserBillingEvents(ctx context.Context, userEmail string) error {
 	if syncErr := service.syncUserBillingEvents(ctx, userEmail); syncErr != nil {
 		return fmt.Errorf("billing.user.sync: %w", syncErr)
@@ -200,6 +217,8 @@ func (service *Service) syncUserBillingEvents(ctx context.Context, userEmail str
 	return nil
 }
 
+// CreateSubscriptionCheckout validates the requested plan and creates a
+// provider checkout session for the normalized customer.
 func (service *Service) CreateSubscriptionCheckout(
 	ctx context.Context,
 	customer CustomerContext,
@@ -379,6 +398,8 @@ func (service *Service) resolvePlanMonthlyCredits(planCode string) (int64, bool)
 	return 0, false
 }
 
+// CreateTopUpCheckout validates top-up eligibility and creates a provider
+// checkout session for the requested pack.
 func (service *Service) CreateTopUpCheckout(
 	ctx context.Context,
 	customer CustomerContext,
@@ -461,6 +482,8 @@ func (service *Service) validateTopUpCheckoutEligibility(
 	return nil
 }
 
+// CreatePortalSession creates a provider-hosted customer portal for the given
+// billing owner.
 func (service *Service) CreatePortalSession(ctx context.Context, userEmail string) (PortalSession, error) {
 	if service == nil || service.provider == nil {
 		return PortalSession{}, ErrBillingProviderUnavailable
@@ -476,6 +499,9 @@ func (service *Service) CreatePortalSession(ctx context.Context, userEmail strin
 	return portalSession, nil
 }
 
+// ReconcileCheckout asks the provider for the current state of a checkout and
+// replays it through the configured webhook processor. This is useful after a
+// user returns from checkout but before the webhook is observed locally.
 func (service *Service) ReconcileCheckout(
 	ctx context.Context,
 	userEmail string,

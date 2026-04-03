@@ -30,6 +30,8 @@ var providerHTTPErrorResolvers = map[string]func(error) (HTTPErrorDescriptor, bo
 	ProviderCodeStripe: resolveStripeHTTPErrorDescriptor,
 }
 
+// ResolveHTTPErrorDescriptor maps package and provider errors to a stable HTTP
+// status code and machine-readable message for app handlers.
 func ResolveHTTPErrorDescriptor(providerCode string, err error) HTTPErrorDescriptor {
 	switch {
 	case errors.Is(err, ErrBillingProviderUnavailable):

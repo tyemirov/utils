@@ -47,6 +47,7 @@ var (
 	ErrWebhookGrantPackUnknown                 = errors.New("billing.webhook.pack.unknown")
 )
 
+// WebhookGrant is the normalized grant payload resolved from a provider event.
 type WebhookGrant struct {
 	UserEmail string
 	SubjectID string
@@ -56,6 +57,8 @@ type WebhookGrant struct {
 	Metadata  map[string]string
 }
 
+// WebhookGrantResolver resolves provider-native webhook payloads into
+// package-level grant instructions.
 type WebhookGrantResolver interface {
 	Resolve(context.Context, WebhookEvent) (WebhookGrant, bool, error)
 }
@@ -65,6 +68,8 @@ type webhookCreditsProcessor struct {
 	resolver WebhookGrantResolver
 }
 
+// NewCreditsWebhookProcessor builds a webhook processor that applies resolved
+// grants through an application-owned CreditGranter implementation.
 func NewCreditsWebhookProcessor(
 	granter CreditGranter,
 	resolver WebhookGrantResolver,
@@ -119,6 +124,8 @@ func cloneGrantMetadata(source map[string]string) map[string]string {
 	return cloneStringMap(source)
 }
 
+// NewWebhookGrantResolver returns the provider-native grant resolver used by
+// the shared credit processor.
 func NewWebhookGrantResolver(provider CommerceProvider) (WebhookGrantResolver, error) {
 	if provider == nil {
 		return nil, ErrWebhookGrantResolverProviderUnavailable

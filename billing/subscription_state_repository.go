@@ -44,6 +44,8 @@ func (billingSubscriptionStateRecord) TableName() string {
 	return billingSubscriptionStateTableName
 }
 
+// SubscriptionState is the normalized persisted billing state for a user and
+// provider pair.
 type SubscriptionState struct {
 	ProviderCode        string
 	UserEmail           string
@@ -59,6 +61,8 @@ type SubscriptionState struct {
 	UpdatedAt           time.Time
 }
 
+// SubscriptionStateUpsertInput is the normalized state snapshot written after
+// a webhook event, sync event, or live inspection.
 type SubscriptionStateUpsertInput struct {
 	ProviderCode      string
 	UserEmail         string
@@ -73,6 +77,8 @@ type SubscriptionStateUpsertInput struct {
 	LastTransactionID string
 }
 
+// SubscriptionStateRepository persists normalized subscription state keyed by
+// provider code and normalized user email.
 type SubscriptionStateRepository interface {
 	Upsert(context.Context, SubscriptionStateUpsertInput) error
 	Get(context.Context, string, string) (SubscriptionState, bool, error)
@@ -83,12 +89,15 @@ type subscriptionStateRepository struct {
 	database *gorm.DB
 }
 
+// NewSubscriptionStateRepository returns the package's GORM-backed repository
+// implementation.
 func NewSubscriptionStateRepository(database *gorm.DB) SubscriptionStateRepository {
 	return &subscriptionStateRepository{
 		database: database,
 	}
 }
 
+// Migrate creates or updates the billing subscription-state table.
 func Migrate(ctx context.Context, database *gorm.DB) error {
 	if ctx == nil || database == nil {
 		return ErrBillingSubscriptionStateRepositoryUnavailable

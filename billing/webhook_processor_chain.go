@@ -6,6 +6,8 @@ type webhookProcessorChain struct {
 	processors []WebhookProcessor
 }
 
+// NewWebhookProcessorChain combines multiple processors into a single
+// WebhookProcessor that executes them in order.
 func NewWebhookProcessorChain(processors ...WebhookProcessor) WebhookProcessor {
 	filteredProcessors := make([]WebhookProcessor, 0, len(processors))
 	for _, processor := range processors {
