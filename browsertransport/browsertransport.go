@@ -4,12 +4,10 @@ package browsertransport
 
 import (
 	"context"
-	"crypto/tls"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
-	"net/http/cookiejar"
 	"net/url"
 	"os/exec"
 	"regexp"
@@ -22,6 +20,7 @@ import (
 	"github.com/chromedp/cdproto/fetch"
 	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/chromedp"
+	"github.com/tyemirov/utils/httptransport"
 	"golang.org/x/net/proxy"
 )
 
@@ -136,7 +135,7 @@ const DefaultStealthScript = `
 `
 
 const defaultRenderTimeout = 30 * time.Second
-const defaultHTTPTimeout = 15 * time.Second
+const defaultHTTPTimeout = httptransport.DefaultTimeout
 
 // BrowserMode describes how a browser should reach the upstream network.
 type BrowserMode string
@@ -162,12 +161,7 @@ type BrowserProfile struct {
 }
 
 // HTTPProfile describes how to build an HTTP client transport.
-type HTTPProfile struct {
-	ID               string
-	Provider         string
-	URL              string
-	IgnoreCertErrors bool
-}
+type HTTPProfile = httptransport.Profile
 
 // LaunchOptions controls browser process launch behavior.
 type LaunchOptions struct {
@@ -223,13 +217,11 @@ type Session struct {
 var (
 	netListen                = net.Listen
 	proxySocks               = proxy.SOCKS5
-	proxyFromURL             = proxy.FromURL
 	urlParse                 = url.Parse
 	chromedpRunner           = chromedp.Run
 	chromedpNewExecAllocator = chromedp.NewExecAllocator
 	chromedpNewContext       = chromedp.NewContext
 	chromedpListenTarget     = chromedp.ListenTarget
-	cookieJarNew             = cookiejar.New
 	setupProxyAuthFn         = setupProxyAuth
 )
 
@@ -272,29 +264,7 @@ func InferBrowserProfile(rawProxyURL string, ignoreCertErrors bool) (BrowserProf
 
 // InferHTTPProfile derives an HTTP transport profile from a raw proxy URL.
 func InferHTTPProfile(rawProxyURL string, ignoreCertErrors bool) (HTTPProfile, error) {
-	trimmedProxyURL := strings.TrimSpace(rawProxyURL)
-	if trimmedProxyURL == "" {
-		return HTTPProfile{
-			ID:               "direct",
-			Provider:         "direct",
-			IgnoreCertErrors: ignoreCertErrors,
-		}, nil
-	}
-
-	parsedProxyURL, parseError := url.Parse(trimmedProxyURL)
-	if parseError != nil {
-		return HTTPProfile{}, fmt.Errorf("parsing HTTP proxy URL: %w", parseError)
-	}
-	if parsedProxyURL.Scheme == "" || parsedProxyURL.Host == "" {
-		return HTTPProfile{}, fmt.Errorf("invalid HTTP proxy URL %q", trimmedProxyURL)
-	}
-
-	return HTTPProfile{
-		ID:               inferredTransportID(trimmedProxyURL),
-		Provider:         inferredProvider(trimmedProxyURL),
-		URL:              trimmedProxyURL,
-		IgnoreCertErrors: ignoreCertErrors,
-	}, nil
+	return httptransport.InferProfile(rawProxyURL, ignoreCertErrors)
 }
 
 // NewSession launches a reusable browser session for the given profile.
@@ -558,49 +528,7 @@ func RenderPages(ctx context.Context, targetURLs []string, config Config) ([]*Re
 
 // NewHTTPClient builds an HTTP client bound to one transport profile.
 func NewHTTPClient(httpProfile HTTPProfile, timeout time.Duration) (*http.Client, error) {
-	normalizedProfile, normalizeError := normalizeHTTPProfile(httpProfile)
-	if normalizeError != nil {
-		return nil, normalizeError
-	}
-
-	jar, jarError := cookieJarNew(nil)
-	if jarError != nil {
-		return nil, fmt.Errorf("creating cookie jar: %w", jarError)
-	}
-
-	transport := &http.Transport{
-		Proxy:             http.ProxyFromEnvironment,
-		ForceAttemptHTTP2: true,
-	}
-
-	if normalizedProfile.URL != "" {
-		parsedProxyURL, _ := url.Parse(normalizedProfile.URL)
-		if isSOCKSProxy(normalizedProfile.URL) {
-			dialer, dialerError := proxyFromURL(parsedProxyURL, proxy.Direct)
-			if dialerError != nil {
-				return nil, fmt.Errorf("creating SOCKS dialer: %w", dialerError)
-			}
-			if contextDialer, ok := dialer.(proxy.ContextDialer); ok {
-				transport.DialContext = contextDialer.DialContext
-			} else {
-				transport.DialContext = func(ctx context.Context, network string, address string) (net.Conn, error) {
-					return dialer.Dial(network, address)
-				}
-			}
-			transport.Proxy = nil
-		} else {
-			transport.Proxy = http.ProxyURL(parsedProxyURL)
-		}
-	}
-	if normalizedProfile.IgnoreCertErrors {
-		transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
-	}
-
-	return &http.Client{
-		Transport: transport,
-		Jar:       jar,
-		Timeout:   httpTimeoutOrDefault(timeout),
-	}, nil
+	return httptransport.NewClient(httpProfile, timeout)
 }
 
 func normalizeBrowserProfile(browserProfile BrowserProfile) (BrowserProfile, error) {
@@ -667,28 +595,7 @@ func normalizeBrowserProfile(browserProfile BrowserProfile) (BrowserProfile, err
 }
 
 func normalizeHTTPProfile(httpProfile HTTPProfile) (HTTPProfile, error) {
-	trimmedProxyURL := strings.TrimSpace(httpProfile.URL)
-	if httpProfile.ID == "" {
-		httpProfile.ID = inferredTransportID(trimmedProxyURL)
-	}
-	if httpProfile.Provider == "" {
-		httpProfile.Provider = inferredProvider(trimmedProxyURL)
-	}
-	httpProfile.URL = trimmedProxyURL
-
-	if trimmedProxyURL == "" {
-		return httpProfile, nil
-	}
-
-	parsedProxyURL, parseError := url.Parse(trimmedProxyURL)
-	if parseError != nil {
-		return HTTPProfile{}, fmt.Errorf("parsing HTTP proxy URL: %w", parseError)
-	}
-	if parsedProxyURL.Scheme == "" || parsedProxyURL.Host == "" {
-		return HTTPProfile{}, fmt.Errorf("invalid HTTP proxy URL %q", trimmedProxyURL)
-	}
-
-	return httpProfile, nil
+	return httptransport.NormalizeProfile(httpProfile)
 }
 
 func inferredProvider(proxyURL string) string {
@@ -714,10 +621,7 @@ func inferredTransportID(proxyURL string) string {
 }
 
 func httpTimeoutOrDefault(timeout time.Duration) time.Duration {
-	if timeout <= 0 {
-		return defaultHTTPTimeout
-	}
-	return timeout
+	return httptransport.TimeoutOrDefault(timeout)
 }
 
 func isSOCKSProxy(rawProxyURL string) bool {

@@ -3,7 +3,6 @@ package browsertransport
 import (
 	"context"
 	"net"
-	"net/http/cookiejar"
 	"sync"
 
 	"github.com/chromedp/chromedp"
@@ -12,26 +11,22 @@ import (
 func resetBrowserTransportHooks() func() {
 	originalNetListen := netListen
 	originalProxySocks := proxySocks
-	originalProxyFromURL := proxyFromURL
 	originalURLParse := urlParse
 	originalChromedpRunner := chromedpRunner
 	originalChromedpNewExecAllocator := chromedpNewExecAllocator
 	originalChromedpNewContext := chromedpNewContext
 	originalChromedpListenTarget := chromedpListenTarget
-	originalCookieJarNew := cookieJarNew
 	originalSetupProxyAuthFn := setupProxyAuthFn
 	originalProxyAuthRunner := proxyAuthRunner
 
 	return func() {
 		netListen = originalNetListen
 		proxySocks = originalProxySocks
-		proxyFromURL = originalProxyFromURL
 		urlParse = originalURLParse
 		chromedpRunner = originalChromedpRunner
 		chromedpNewExecAllocator = originalChromedpNewExecAllocator
 		chromedpNewContext = originalChromedpNewContext
 		chromedpListenTarget = originalChromedpListenTarget
-		cookieJarNew = originalCookieJarNew
 		setupProxyAuthFn = originalSetupProxyAuthFn
 		proxyAuthRunner = originalProxyAuthRunner
 	}
@@ -41,16 +36,6 @@ type dialerFunc func(network string, address string) (net.Conn, error)
 
 func (dialer dialerFunc) Dial(network string, address string) (net.Conn, error) {
 	return dialer(network, address)
-}
-
-type contextDialerFunc func(ctx context.Context, network string, address string) (net.Conn, error)
-
-func (dialer contextDialerFunc) DialContext(ctx context.Context, network string, address string) (net.Conn, error) {
-	return dialer(ctx, network, address)
-}
-
-func (dialer contextDialerFunc) Dial(network string, address string) (net.Conn, error) {
-	return dialer(context.Background(), network, address)
 }
 
 type stubAddr string
@@ -96,8 +81,4 @@ func allocatorContext(parent context.Context, options ...chromedp.ExecAllocatorO
 
 func browserContext(parent context.Context, options ...chromedp.ContextOption) (context.Context, context.CancelFunc) {
 	return context.WithCancel(parent)
-}
-
-func newCookieJar(options *cookiejar.Options) (*cookiejar.Jar, error) {
-	return cookiejar.New(options)
 }
