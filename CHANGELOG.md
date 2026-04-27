@@ -1,5 +1,26 @@
 # Changelog
 
+## [v0.13.0] - 2026-04-27
+
+### Features ✨
+- Add reusable HTTP client transport with proxy support in a new `httptransport` package.
+- Support SOCKS proxy and HTTP proxy seamlessly with automatic transport configuration.
+
+### Improvements ⚙️
+- Refactor HTTP client profile handling and normalization through the new `httptransport` package.
+- Replace inline HTTP client implementation with calls to `httptransport` for cleaner code and easier maintenance.
+- Centralize proxy URL parsing, validation, and transport ID inference in `httptransport`.
+
+### Bug Fixes 🐛
+- _No changes._
+
+### Testing 🧪
+- Add comprehensive tests for the new HTTP transport client covering direct, HTTP, and SOCKS proxy scenarios.
+- Remove older HTTP client tests that injected failure branches now covered by `httptransport` tests.
+
+### Docs 📚
+- _No changes._
+
 ## [v0.12.1] - 2026-04-03
 
 ### Features ✨
