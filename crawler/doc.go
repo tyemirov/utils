@@ -2,4 +2,7 @@
 // applies configurable rules, and emits normalized results. It supports proxy
 // rotation, retry with backoff, rate limiting, platform-specific hooks, and
 // extensible response handling through the ResponseHandler interface.
+//
+// The package is also the public boundary for crawling-related HTTP, browser,
+// and provider-aware proxy transport helpers used by client projects.
 package crawler
