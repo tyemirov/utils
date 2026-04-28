@@ -1,5 +1,28 @@
 # Changelog
 
+## [v0.14.0] - 2026-04-28
+
+### Features ✨
+- Added crawler package with HTTP and browser transports.
+- Introduced proxy rotation selector for provider/user-aware proxy management.
+- Supported proxy rotation with sticky selection that advances on failure.
+
+### Improvements ⚙️
+- Provided browser transport wrappers exposing browser launch, page rendering, and Chrome version detection utilities.
+- HTTP transport facade added to configure and create HTTP clients with proxy profiles.
+- Enhanced proxy rotation selector with thread-safe provider and user rotation logic and context-attached proxy metadata.
+
+### Bug Fixes 🐛
+- _No changes._
+
+### Testing 🧪
+- Added comprehensive tests for browser transport facade covering profile inference, session management, and rendering.
+- Tested HTTP transport facade for profile inference, normalization, client creation, and SOCKS proxy detection.
+- Unit tested proxy rotation selector behavior including failure/success recording, selection stickiness, and provider-user rotations.
+
+### Docs 📚
+- Documented crawler package describing its crawling capabilities, proxy rotation support, and transport helpers for HTTP and browser clients.
+
 ## [v0.13.0] - 2026-04-27
 
 ### Features ✨
