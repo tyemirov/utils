@@ -54,10 +54,16 @@ type proxyRotator struct {
 func (rotator *proxyRotator) nextProxy(request *http.Request) (*url.URL, error) {
 	rotator.mu.Lock()
 	defer rotator.mu.Unlock()
+
+	if candidate := rotator.currentAvailableProxy(); candidate != nil {
+		attachProxyURL(request, candidate.String())
+		return candidate, nil
+	}
+
 	for attempts := 0; attempts < len(rotator.proxies); attempts++ {
 		rotator.position = (rotator.position + 1) % len(rotator.proxies)
 		candidate := rotator.proxies[rotator.position]
-		if rotator.tracker == nil || rotator.tracker.IsAvailable(candidate.String()) {
+		if rotator.isAvailable(candidate) {
 			attachProxyURL(request, candidate.String())
 			return candidate, nil
 		}
@@ -68,6 +74,21 @@ func (rotator *proxyRotator) nextProxy(request *http.Request) (*url.URL, error) 
 	}
 	attachProxyURL(request, candidate.String())
 	return candidate, nil
+}
+
+func (rotator *proxyRotator) currentAvailableProxy() *url.URL {
+	if rotator.tracker == nil || rotator.position < 0 || rotator.position >= len(rotator.proxies) {
+		return nil
+	}
+	candidate := rotator.proxies[rotator.position]
+	if !rotator.isAvailable(candidate) {
+		return nil
+	}
+	return candidate
+}
+
+func (rotator *proxyRotator) isAvailable(candidate *url.URL) bool {
+	return rotator.tracker == nil || rotator.tracker.IsAvailable(candidate.String())
 }
 
 func attachProxyURL(request *http.Request, proxyURL string) {
