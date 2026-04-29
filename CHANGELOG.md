@@ -1,5 +1,23 @@
 # Changelog
 
+## [v0.14.1] - 2026-04-28
+
+### Features ✨
+- _No changes._
+
+### Improvements ⚙️
+- Enhance proxy rotator to keep using the current healthy proxy until it fails before switching to the next proxy.
+
+### Bug Fixes 🐛
+- Fix proxy rotator logic to correctly evaluate and attach proxies, improving proxy rotation reliability.
+
+### Testing 🧪
+- Add tests to verify proxy rotator sticks to successful proxies until failure.
+- Update existing proxy rotator tests to support scenarios without health tracker.
+
+### Docs 📚
+- _No changes._
+
 ## [v0.14.0] - 2026-04-28
 
 ### Features ✨
