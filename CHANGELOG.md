@@ -1,5 +1,31 @@
 # Changelog
 
+## [v0.15.0] - 2026-04-30
+
+### Features ✨
+- Introduce Proxy Lease Selector for managing proxy rotations with provider/user awareness.
+- Add API to acquire, release, and report success or failure of proxy leases.
+- Attach proxy lease selection directly to HTTP requests for seamless proxy usage.
+
+### Improvements ⚙️
+- Enforce validation of provider and user names, and proxy URLs in proxy configurations.
+- Support reservation counting to manage concurrent lease usage properly.
+- Expand compatibility with string-only proxy failure/success reports.
+- Return typed error when no proxy lease is available for required acquisition.
+
+### Bug Fixes 🐛
+- Reject empty or invalid proxy URLs during lease selector creation.
+- Ignore stale reports after generation changes to maintain selector consistency.
+- Prevent panics and handle nil selector cases gracefully during lease operations.
+
+### Testing 🧪
+- Add comprehensive unit tests covering lease acquisition, rotation, reuse, validation, and edge cases.
+- Test fallback behaviors when selectors are nil or leased proxies invalid.
+- Verify request-based lease acquisition attaches correct proxy selection context.
+
+### Docs 📚
+- Update issues documentation with relevant notes for proxy lease selector usage and issues.
+
 ## [v0.14.1] - 2026-04-28
 
 ### Features ✨
