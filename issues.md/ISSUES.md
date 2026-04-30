@@ -10,6 +10,10 @@ Each issue is formatted as `- [ ] [UT-<number>]`. When resolved it becomes `- [x
 
 ## Improvements (200–299)
 
+- [x] [UT-200] Add lease-capable proxy rotation selector. (Move the reusable provider/user lease and reservation behavior needed by browser/manual crawlers into `crawler` while preserving the existing proxy rotation selector API.)
+
+Resolved: added `ProxyLease`, `ProxyLeaseSelector`, required/acquire/report/release helpers, request-context attachment, reservation tracking for concurrent manual/browser leases, and compatibility delegation for the existing `ProxyRotationSelector` API. The shared selector keeps successful leases sticky and uses immediate provider rotation on failure while advancing the failed provider's next user for the next return. Added crawler tests for the new lease contract, stale generation handling, duplicate proxy URLs, invalid/empty configs, flat-list style providers, request context metadata, release/reuse, and compatibility branches. Changed files: `crawler/proxy_rotation_selector.go`, `crawler/proxy_lease_selector_test.go`, `crawler/proxy_rotation_selector_test.go`, `issues.md/ISSUES.md`. Verified with `timeout -k 350s -s SIGKILL 350s make test`, `timeout -k 350s -s SIGKILL 350s make lint`, and `timeout -k 350s -s SIGKILL 350s make ci`.
+
 ## BugFixes (300–399)
 
 - [x] [UT-306] Build SOCKS dial targets with `net.JoinHostPort`. (Use bracket-aware host:port assembly in the SOCKS forwarder and add IPv6 dial-target regression coverage.)

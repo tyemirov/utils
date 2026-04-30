@@ -279,7 +279,10 @@ func TestProxyRotationSelectorNilEmptyAndUnknownBranches(t *testing.T) {
 	require.NoError(t, err)
 	require.Nil(t, proxyURL)
 
-	emptyProviderSelector := &ProxyRotationSelector{providers: []proxyRotationProvider{{name: "empty"}}}
+	emptyProviderSelector := &ProxyRotationSelector{leaseSelector: &ProxyLeaseSelector{
+		providers:    []proxyRotationProvider{{name: "empty"}},
+		reservations: map[string]int{},
+	}}
 	proxyURL, err = emptyProviderSelector.Select(newProxyRotationRequest(t, "https://example.com/empty-provider"))
 	require.NoError(t, err)
 	require.Nil(t, proxyURL)

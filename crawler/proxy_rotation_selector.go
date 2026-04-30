@@ -2,6 +2,7 @@ package crawler
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -12,6 +13,8 @@ import (
 )
 
 type proxySelectionContextKey struct{}
+
+var ErrProxyLeaseUnavailable = errors.New("crawler: proxy lease unavailable")
 
 // ProxyRotationUserConfig describes one ordered proxy credential inside a
 // provider.
@@ -27,14 +30,22 @@ type ProxyRotationProviderConfig struct {
 	Users []ProxyRotationUserConfig
 }
 
-// ProxySelection identifies the provider/user/proxy tuple chosen for one
-// request.
-type ProxySelection struct {
+// ProxyLease identifies the provider/user/proxy tuple chosen for one request.
+type ProxyLease struct {
 	ProviderName string
 	UserName     string
 	ProxyURL     string
 	Generation   uint64
 }
+
+// Valid reports whether the lease has a concrete proxy URL.
+func (lease ProxyLease) Valid() bool {
+	return strings.TrimSpace(lease.ProxyURL) != ""
+}
+
+// ProxySelection identifies the provider/user/proxy tuple chosen for one
+// request.
+type ProxySelection = ProxyLease
 
 type proxySelectionIndex struct {
 	provider int
@@ -53,52 +64,53 @@ type proxyRotationProvider struct {
 	nextUser int
 }
 
-// ProxyRotationSelector keeps one (provider, user) selection sticky until a
-// proxy-related failure advances to the next provider. When the selector later
-// returns to a failed provider, it uses that provider's next user.
-type ProxyRotationSelector struct {
+// ProxyLeaseSelector acquires proxy leases from ordered providers and keeps
+// successful leases sticky until a failure advances rotation.
+type ProxyLeaseSelector struct {
 	mu               sync.Mutex
 	providers        []proxyRotationProvider
 	selectionByProxy map[string]proxySelectionIndex
 	activeProvider   int
 	generation       uint64
+	reservations     map[string]int
 }
 
-// NewProxyRotationSelector constructs a provider-aware proxy selector.
-func NewProxyRotationSelector(configs []ProxyRotationProviderConfig) (*ProxyRotationSelector, error) {
+// NewProxyLeaseSelector constructs a provider-aware lease selector.
+func NewProxyLeaseSelector(configs []ProxyRotationProviderConfig) (*ProxyLeaseSelector, error) {
 	providers := make([]proxyRotationProvider, 0, len(configs))
 	selectionByProxy := make(map[string]proxySelectionIndex)
-	for _, cfg := range configs {
-		providerName := strings.TrimSpace(cfg.Name)
+	for _, providerConfig := range configs {
+		providerName := strings.TrimSpace(providerConfig.Name)
 		if providerName == "" {
-			return nil, fmt.Errorf("proxy provider selector: provider name must not be empty")
+			return nil, fmt.Errorf("proxy lease selector: provider name must not be empty")
 		}
-		users := make([]proxyRotationUser, 0, len(cfg.Users))
-		for _, rawUser := range cfg.Users {
-			userName := strings.TrimSpace(rawUser.Name)
+		users := make([]proxyRotationUser, 0, len(providerConfig.Users))
+		providerIndex := len(providers)
+		for _, userConfig := range providerConfig.Users {
+			userName := strings.TrimSpace(userConfig.Name)
 			if userName == "" {
-				return nil, fmt.Errorf("proxy provider selector: provider %q has user with empty name", providerName)
+				return nil, fmt.Errorf("proxy lease selector: provider %q has user with empty name", providerName)
 			}
-			trimmedURL := strings.TrimSpace(rawUser.URL)
-			if trimmedURL == "" {
+			trimmedProxyURL := strings.TrimSpace(userConfig.URL)
+			if trimmedProxyURL == "" {
 				continue
 			}
-			parsedURL, err := url.Parse(trimmedURL)
+			parsedProxyURL, err := url.Parse(trimmedProxyURL)
 			if err != nil {
-				return nil, fmt.Errorf("proxy provider selector: invalid proxy URL %q: %w", trimmedURL, err)
+				return nil, fmt.Errorf("proxy lease selector: invalid proxy URL %q: %w", trimmedProxyURL, err)
 			}
-			if _, found := selectionByProxy[trimmedURL]; found {
+			if _, found := selectionByProxy[trimmedProxyURL]; found {
 				continue
 			}
 			userIndex := len(users)
-			selectionByProxy[trimmedURL] = proxySelectionIndex{
-				provider: len(providers),
+			selectionByProxy[trimmedProxyURL] = proxySelectionIndex{
+				provider: providerIndex,
 				user:     userIndex,
 			}
 			users = append(users, proxyRotationUser{
 				name:   userName,
-				raw:    trimmedURL,
-				parsed: parsedURL,
+				raw:    trimmedProxyURL,
+				parsed: parsedProxyURL,
 			})
 		}
 		if len(users) == 0 {
@@ -112,75 +124,75 @@ func NewProxyRotationSelector(configs []ProxyRotationProviderConfig) (*ProxyRota
 	if len(providers) == 0 {
 		return nil, nil
 	}
-	return &ProxyRotationSelector{
+	return &ProxyLeaseSelector{
 		providers:        providers,
 		selectionByProxy: selectionByProxy,
+		reservations:     map[string]int{},
 	}, nil
 }
 
-// Select returns the currently active provider/user tuple.
-func (selector *ProxyRotationSelector) Select(request *http.Request) (*url.URL, error) {
+// Acquire reserves and returns the best current proxy lease.
+func (selector *ProxyLeaseSelector) Acquire() ProxyLease {
 	if selector == nil {
-		return nil, nil
+		return ProxyLease{}
 	}
 
 	selector.mu.Lock()
 	defer selector.mu.Unlock()
 
-	if len(selector.providers) == 0 {
-		return nil, nil
+	lease := selector.acquireLocked()
+	if lease.Valid() {
+		selector.reservations[lease.ProxyURL]++
 	}
-	activeProvider := &selector.providers[selector.activeProvider]
-	if len(activeProvider.users) == 0 {
-		return nil, nil
-	}
-	activeUserIndex := activeProvider.nextUser % len(activeProvider.users)
-	activeUser := activeProvider.users[activeUserIndex]
-	selection := ProxySelection{
-		ProviderName: activeProvider.name,
-		UserName:     activeUser.name,
-		ProxyURL:     activeUser.raw,
-		Generation:   selector.generation,
-	}
-	AttachProxySelection(request, selection)
-	return activeUser.parsed, nil
+	return lease
 }
 
-// RecordFailure keeps string-only callers compatible.
-func (selector *ProxyRotationSelector) RecordFailure(proxyURL string) {
-	selection, found := selector.SelectionForProxyURL(proxyURL)
-	if !found {
-		return
+// AcquireRequired reserves and returns a proxy lease or a typed unavailable
+// error when no proxy is configured.
+func (selector *ProxyLeaseSelector) AcquireRequired() (ProxyLease, error) {
+	lease := selector.Acquire()
+	if !lease.Valid() {
+		return ProxyLease{}, fmt.Errorf("%w: no proxy providers configured", ErrProxyLeaseUnavailable)
 	}
-	selector.RecordProxyFailure(selection)
+	return lease, nil
 }
 
-// RecordSuccess keeps string-only callers compatible.
-func (selector *ProxyRotationSelector) RecordSuccess(proxyURL string) {
-	selection, found := selector.SelectionForProxyURL(proxyURL)
-	if !found {
-		return
+// AcquireForRequest reserves a lease and attaches it to the request context for
+// HTTP and Colly callers.
+func (selector *ProxyLeaseSelector) AcquireForRequest(request *http.Request) (ProxyLease, error) {
+	lease, err := selector.AcquireRequired()
+	if err != nil {
+		return ProxyLease{}, err
 	}
-	selector.RecordProxySuccess(selection)
+	AttachProxySelection(request, lease)
+	return lease, nil
 }
 
-// RecordProxyFailure rotates to the next provider and advances the failed
-// provider's user cursor.
-func (selector *ProxyRotationSelector) RecordProxyFailure(selection ProxySelection) {
-	if selector == nil {
-		return
-	}
-
-	normalizedProxyURL := strings.TrimSpace(selection.ProxyURL)
-	if normalizedProxyURL == "" {
+// Release releases a previously acquired lease reservation without reporting
+// success or failure.
+func (selector *ProxyLeaseSelector) Release(lease ProxyLease) {
+	if selector == nil || !lease.Valid() {
 		return
 	}
 
 	selector.mu.Lock()
 	defer selector.mu.Unlock()
 
-	selectionIndex, found := selector.selectionByProxy[normalizedProxyURL]
-	if !found || selection.Generation != selector.generation {
+	selector.releaseLocked(lease)
+}
+
+// ReportFailure releases a lease and rotates immediately to the next provider.
+func (selector *ProxyLeaseSelector) ReportFailure(lease ProxyLease) {
+	if selector == nil || !lease.Valid() {
+		return
+	}
+
+	selector.mu.Lock()
+	defer selector.mu.Unlock()
+
+	selector.releaseLocked(lease)
+	selectionIndex, found := selector.selectionByProxy[strings.TrimSpace(lease.ProxyURL)]
+	if !found || lease.Generation != selector.generation {
 		return
 	}
 
@@ -197,23 +209,18 @@ func (selector *ProxyRotationSelector) RecordProxyFailure(selection ProxySelecti
 	selector.generation++
 }
 
-// RecordProxySuccess makes the successful provider/user tuple sticky until the
-// next accepted failure.
-func (selector *ProxyRotationSelector) RecordProxySuccess(selection ProxySelection) {
-	if selector == nil {
-		return
-	}
-
-	normalizedProxyURL := strings.TrimSpace(selection.ProxyURL)
-	if normalizedProxyURL == "" {
+// ReportSuccess releases a lease and keeps its provider/user tuple sticky.
+func (selector *ProxyLeaseSelector) ReportSuccess(lease ProxyLease) {
+	if selector == nil || !lease.Valid() {
 		return
 	}
 
 	selector.mu.Lock()
 	defer selector.mu.Unlock()
 
-	selectionIndex, found := selector.selectionByProxy[normalizedProxyURL]
-	if !found || selection.Generation != selector.generation {
+	selector.releaseLocked(lease)
+	selectionIndex, found := selector.selectionByProxy[strings.TrimSpace(lease.ProxyURL)]
+	if !found || lease.Generation != selector.generation {
 		return
 	}
 
@@ -227,9 +234,27 @@ func (selector *ProxyRotationSelector) RecordProxySuccess(selection ProxySelecti
 	selector.activeProvider = selectionIndex.provider
 }
 
+// RecordFailure keeps string-only callers compatible.
+func (selector *ProxyLeaseSelector) RecordFailure(proxyURL string) {
+	selection, found := selector.SelectionForProxyURL(proxyURL)
+	if !found {
+		return
+	}
+	selector.ReportFailure(selection)
+}
+
+// RecordSuccess keeps string-only callers compatible.
+func (selector *ProxyLeaseSelector) RecordSuccess(proxyURL string) {
+	selection, found := selector.SelectionForProxyURL(proxyURL)
+	if !found {
+		return
+	}
+	selector.ReportSuccess(selection)
+}
+
 // SelectionForProxyURL returns the current-generation selection metadata for a
 // known proxy URL.
-func (selector *ProxyRotationSelector) SelectionForProxyURL(proxyURL string) (ProxySelection, bool) {
+func (selector *ProxyLeaseSelector) SelectionForProxyURL(proxyURL string) (ProxySelection, bool) {
 	if selector == nil {
 		return ProxySelection{}, false
 	}
@@ -255,6 +280,180 @@ func (selector *ProxyRotationSelector) SelectionForProxyURL(proxyURL string) (Pr
 		ProxyURL:     user.raw,
 		Generation:   selector.generation,
 	}, true
+}
+
+func (selector *ProxyLeaseSelector) acquireLocked() ProxyLease {
+	if len(selector.providers) == 0 {
+		return ProxyLease{}
+	}
+	if selector.activeProvider < 0 || selector.activeProvider >= len(selector.providers) {
+		selector.activeProvider = 0
+	}
+	if lease, found := selector.firstUnreservedLeaseFromProviderLocked(selector.activeProvider); found {
+		return lease
+	}
+
+	for providerOffset := 1; providerOffset < len(selector.providers); providerOffset++ {
+		providerIndex := (selector.activeProvider + providerOffset) % len(selector.providers)
+		if lease, found := selector.firstUnreservedLeaseFromProviderLocked(providerIndex); found {
+			return lease
+		}
+	}
+
+	return selector.leastReservedLeaseLocked()
+}
+
+func (selector *ProxyLeaseSelector) firstUnreservedLeaseFromProviderLocked(providerIndex int) (ProxyLease, bool) {
+	if providerIndex < 0 || providerIndex >= len(selector.providers) {
+		return ProxyLease{}, false
+	}
+
+	provider := selector.providers[providerIndex]
+	if len(provider.users) == 0 {
+		return ProxyLease{}, false
+	}
+	userIndex := provider.nextUser
+	if userIndex < 0 || userIndex >= len(provider.users) {
+		userIndex = 0
+	}
+
+	for userOffset := 0; userOffset < len(provider.users); userOffset++ {
+		candidateUserIndex := (userIndex + userOffset) % len(provider.users)
+		candidateUser := provider.users[candidateUserIndex]
+		if selector.reservations[candidateUser.raw] > 0 {
+			continue
+		}
+		return selector.leaseForProviderUser(provider, candidateUser), true
+	}
+	return ProxyLease{}, false
+}
+
+func (selector *ProxyLeaseSelector) leastReservedLeaseLocked() ProxyLease {
+	fallbackLease := ProxyLease{}
+	fallbackReservations := 0
+	fallbackSet := false
+	for providerOffset := 0; providerOffset < len(selector.providers); providerOffset++ {
+		providerIndex := (selector.activeProvider + providerOffset) % len(selector.providers)
+		provider := selector.providers[providerIndex]
+		if len(provider.users) == 0 {
+			continue
+		}
+		userIndex := provider.nextUser
+		if userIndex < 0 || userIndex >= len(provider.users) {
+			userIndex = 0
+		}
+		for userOffset := 0; userOffset < len(provider.users); userOffset++ {
+			candidateUserIndex := (userIndex + userOffset) % len(provider.users)
+			candidateUser := provider.users[candidateUserIndex]
+			reservations := selector.reservations[candidateUser.raw]
+			if fallbackSet && reservations >= fallbackReservations {
+				continue
+			}
+			fallbackLease = selector.leaseForProviderUser(provider, candidateUser)
+			fallbackReservations = reservations
+			fallbackSet = true
+		}
+	}
+	return fallbackLease
+}
+
+func (selector *ProxyLeaseSelector) leaseForProviderUser(provider proxyRotationProvider, user proxyRotationUser) ProxyLease {
+	return ProxyLease{
+		ProviderName: provider.name,
+		UserName:     user.name,
+		ProxyURL:     user.raw,
+		Generation:   selector.generation,
+	}
+}
+
+func (selector *ProxyLeaseSelector) releaseLocked(lease ProxyLease) {
+	reservations := selector.reservations[strings.TrimSpace(lease.ProxyURL)]
+	switch {
+	case reservations <= 1:
+		delete(selector.reservations, strings.TrimSpace(lease.ProxyURL))
+	default:
+		selector.reservations[strings.TrimSpace(lease.ProxyURL)] = reservations - 1
+	}
+}
+
+// ProxyRotationSelector keeps one (provider, user) selection sticky until a
+// proxy-related failure advances to the next provider. When the selector later
+// returns to a failed provider, it uses that provider's next user.
+type ProxyRotationSelector struct {
+	leaseSelector *ProxyLeaseSelector
+}
+
+// NewProxyRotationSelector constructs a provider-aware proxy selector.
+func NewProxyRotationSelector(configs []ProxyRotationProviderConfig) (*ProxyRotationSelector, error) {
+	leaseSelector, err := NewProxyLeaseSelector(configs)
+	if err != nil {
+		return nil, err
+	}
+	if leaseSelector == nil {
+		return nil, nil
+	}
+	return &ProxyRotationSelector{leaseSelector: leaseSelector}, nil
+}
+
+// Select returns the currently active provider/user tuple.
+func (selector *ProxyRotationSelector) Select(request *http.Request) (*url.URL, error) {
+	if selector == nil || selector.leaseSelector == nil {
+		return nil, nil
+	}
+
+	lease := selector.leaseSelector.Acquire()
+	if !lease.Valid() {
+		return nil, nil
+	}
+	AttachProxySelection(request, lease)
+	parsedProxyURL, err := url.Parse(lease.ProxyURL)
+	if err != nil {
+		return nil, fmt.Errorf("proxy rotation selector: invalid selected proxy URL %q: %w", lease.ProxyURL, err)
+	}
+	return parsedProxyURL, nil
+}
+
+// RecordFailure keeps string-only callers compatible.
+func (selector *ProxyRotationSelector) RecordFailure(proxyURL string) {
+	if selector == nil || selector.leaseSelector == nil {
+		return
+	}
+	selector.leaseSelector.RecordFailure(proxyURL)
+}
+
+// RecordSuccess keeps string-only callers compatible.
+func (selector *ProxyRotationSelector) RecordSuccess(proxyURL string) {
+	if selector == nil || selector.leaseSelector == nil {
+		return
+	}
+	selector.leaseSelector.RecordSuccess(proxyURL)
+}
+
+// RecordProxyFailure rotates to the next provider and advances the failed
+// provider's user cursor.
+func (selector *ProxyRotationSelector) RecordProxyFailure(selection ProxySelection) {
+	if selector == nil || selector.leaseSelector == nil {
+		return
+	}
+	selector.leaseSelector.ReportFailure(selection)
+}
+
+// RecordProxySuccess makes the successful provider/user tuple sticky until the
+// next accepted failure.
+func (selector *ProxyRotationSelector) RecordProxySuccess(selection ProxySelection) {
+	if selector == nil || selector.leaseSelector == nil {
+		return
+	}
+	selector.leaseSelector.ReportSuccess(selection)
+}
+
+// SelectionForProxyURL returns the current-generation selection metadata for a
+// known proxy URL.
+func (selector *ProxyRotationSelector) SelectionForProxyURL(proxyURL string) (ProxySelection, bool) {
+	if selector == nil || selector.leaseSelector == nil {
+		return ProxySelection{}, false
+	}
+	return selector.leaseSelector.SelectionForProxyURL(proxyURL)
 }
 
 // AttachProxySelection records a selection on a request context.
