@@ -15,6 +15,7 @@ import (
 type proxySelectionContextKey struct{}
 
 var ErrProxyLeaseUnavailable = errors.New("crawler: proxy lease unavailable")
+var ErrProxyLeaseCandidatesExhausted = errors.New("crawler: proxy lease candidates exhausted")
 
 // ProxyRotationUserConfig describes one ordered proxy credential inside a
 // provider.
@@ -75,6 +76,13 @@ type ProxyLeaseSelector struct {
 	reservations     map[string]int
 }
 
+// ProxyLeaseAttemptScope tracks failed proxy leases for one scrape, request
+// batch, or other caller-defined operation.
+type ProxyLeaseAttemptScope struct {
+	mu           sync.Mutex
+	failedLeases map[string]struct{}
+}
+
 // NewProxyLeaseSelector constructs a provider-aware lease selector.
 func NewProxyLeaseSelector(configs []ProxyRotationProviderConfig) (*ProxyLeaseSelector, error) {
 	providers := make([]proxyRotationProvider, 0, len(configs))
@@ -131,6 +139,12 @@ func NewProxyLeaseSelector(configs []ProxyRotationProviderConfig) (*ProxyLeaseSe
 	}, nil
 }
 
+// NewProxyLeaseAttemptScope constructs an operation-scoped failed-lease
+// tracker.
+func NewProxyLeaseAttemptScope() *ProxyLeaseAttemptScope {
+	return &ProxyLeaseAttemptScope{failedLeases: map[string]struct{}{}}
+}
+
 // Acquire reserves and returns the best current proxy lease.
 func (selector *ProxyLeaseSelector) Acquire() ProxyLease {
 	if selector == nil {
@@ -155,6 +169,22 @@ func (selector *ProxyLeaseSelector) AcquireRequired() (ProxyLease, error) {
 		return ProxyLease{}, fmt.Errorf("%w: no proxy providers configured", ErrProxyLeaseUnavailable)
 	}
 	return lease, nil
+}
+
+// CandidateCount returns the number of configured proxy candidates.
+func (selector *ProxyLeaseSelector) CandidateCount() int {
+	if selector == nil {
+		return 0
+	}
+
+	selector.mu.Lock()
+	defer selector.mu.Unlock()
+
+	candidateCount := 0
+	for _, provider := range selector.providers {
+		candidateCount += len(provider.users)
+	}
+	return candidateCount
 }
 
 // AcquireForRequest reserves a lease and attaches it to the request context for
@@ -280,6 +310,83 @@ func (selector *ProxyLeaseSelector) SelectionForProxyURL(proxyURL string) (Proxy
 		ProxyURL:     user.raw,
 		Generation:   selector.generation,
 	}, true
+}
+
+// AcquireRequired reserves the next lease that has not failed inside this
+// operation scope.
+func (scope *ProxyLeaseAttemptScope) AcquireRequired(selector *ProxyLeaseSelector) (ProxyLease, error) {
+	candidateCount := selector.CandidateCount()
+	maxSkippedLeases := candidateCount
+	if maxSkippedLeases < 1 {
+		maxSkippedLeases = 1
+	}
+
+	for skippedLeases := 0; skippedLeases < maxSkippedLeases; skippedLeases++ {
+		lease, err := selector.AcquireRequired()
+		if err != nil {
+			return ProxyLease{}, err
+		}
+		if !scope.Failed(lease) {
+			return lease, nil
+		}
+		selector.ReportFailure(lease)
+	}
+	return ProxyLease{}, ProxyLeaseCandidatesExhaustedError(candidateCount)
+}
+
+// Failed reports whether the lease already failed inside this operation scope.
+func (scope *ProxyLeaseAttemptScope) Failed(lease ProxyLease) bool {
+	if scope == nil || !lease.Valid() {
+		return false
+	}
+
+	scope.mu.Lock()
+	defer scope.mu.Unlock()
+
+	_, failed := scope.failedLeases[proxyLeaseAttemptScopeKey(lease)]
+	return failed
+}
+
+// ReportFailure records a lease failure inside this operation scope.
+func (scope *ProxyLeaseAttemptScope) ReportFailure(lease ProxyLease) {
+	if scope == nil || !lease.Valid() {
+		return
+	}
+
+	scope.mu.Lock()
+	defer scope.mu.Unlock()
+
+	if scope.failedLeases == nil {
+		scope.failedLeases = map[string]struct{}{}
+	}
+	scope.failedLeases[proxyLeaseAttemptScopeKey(lease)] = struct{}{}
+}
+
+// Exhausted reports whether every configured candidate has failed inside this
+// operation scope.
+func (scope *ProxyLeaseAttemptScope) Exhausted(candidateCount int) bool {
+	if scope == nil || candidateCount < 1 {
+		return false
+	}
+
+	scope.mu.Lock()
+	defer scope.mu.Unlock()
+
+	return len(scope.failedLeases) >= candidateCount
+}
+
+// ProxyLeaseCandidatesExhaustedError wraps ErrProxyLeaseCandidatesExhausted
+// with the attempted candidate count.
+func ProxyLeaseCandidatesExhaustedError(candidateCount int) error {
+	return fmt.Errorf("%w: all %d configured proxy candidate(s) failed", ErrProxyLeaseCandidatesExhausted, candidateCount)
+}
+
+func proxyLeaseAttemptScopeKey(lease ProxyLease) string {
+	return strings.Join([]string{
+		strings.TrimSpace(lease.ProviderName),
+		strings.TrimSpace(lease.UserName),
+		strings.TrimSpace(lease.ProxyURL),
+	}, "\x00")
 }
 
 func (selector *ProxyLeaseSelector) acquireLocked() ProxyLease {

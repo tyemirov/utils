@@ -1,5 +1,22 @@
 # Changelog
 
+## [v0.15.1] - 2026-05-01
+
+### Features ✨
+- Add `crawler.ProxyLeaseAttemptScope` for operation-scoped failed-lease tracking and exhausted-candidate detection.
+
+### Improvements ⚙️
+- Expose proxy candidate counts from `ProxyLeaseSelector` for callers that need bounded per-operation retry loops.
+
+### Bug Fixes 🐛
+- Prevent scrape/request batches from reacquiring leases that already failed inside the same operation when callers opt into the attempt scope.
+
+### Testing 🧪
+- Add crawler tests for failed-lease skipping, exhausted-candidate errors, nil scopes, nil selectors, and invalid leases.
+
+### Docs 📚
+- Document crawler proxy rotation and attempt-scope behavior in README and architecture notes.
+
 ## [v0.15.0] - 2026-04-30
 
 ### Features ✨

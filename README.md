@@ -17,6 +17,16 @@ projects.
 - **NewHTTPClient** - Build an HTTP client bound to the same transport profile
   model.
 
+## Crawler
+Reusable crawler primitives for proxy-aware scraping workloads.
+
+- **ProxyLeaseSelector** - Select provider/user-aware proxy leases, keep
+  successful leases sticky, and rotate providers immediately after a reported
+  failure.
+- **ProxyLeaseAttemptScope** - Track failed leases for one scrape or request
+  batch so callers can skip candidates that already failed during that
+  operation and stop with a typed exhausted-candidates error.
+
 ## JSEval
 Compatibility wrapper around `browsertransport` for existing callers that only
 need one-shot page rendering.

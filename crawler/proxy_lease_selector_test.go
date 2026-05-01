@@ -227,6 +227,84 @@ func TestProxyLeaseSelectorCompatibilityStringReports(t *testing.T) {
 	require.Equal(t, lease.ProxyURL, reusedLease.ProxyURL)
 }
 
+func TestProxyLeaseAttemptScopeSkipsFailedLeasesUntilExhausted(t *testing.T) {
+	t.Parallel()
+
+	selector, err := NewProxyLeaseSelector([]ProxyRotationProviderConfig{
+		{
+			Name: "brightdata",
+			Users: []ProxyRotationUserConfig{
+				{Name: "brightdata-one", URL: "http://brightdata-one.example:8080"},
+			},
+		},
+		{
+			Name: "iproyal",
+			Users: []ProxyRotationUserConfig{
+				{Name: "iproyal-one", URL: "http://iproyal-one.example:8080"},
+			},
+		},
+		{
+			Name: "webshare",
+			Users: []ProxyRotationUserConfig{
+				{Name: "webshare-one", URL: "http://webshare-one.example:8080"},
+				{Name: "webshare-two", URL: "http://webshare-two.example:8080"},
+			},
+		},
+	})
+	require.NoError(t, err)
+	require.Equal(t, 4, selector.CandidateCount())
+
+	attemptScope := NewProxyLeaseAttemptScope()
+	var proxyURLs []string
+	for candidateIndex := 0; candidateIndex < selector.CandidateCount(); candidateIndex++ {
+		lease, err := attemptScope.AcquireRequired(selector)
+		require.NoError(t, err)
+		proxyURLs = append(proxyURLs, lease.ProxyURL)
+		require.False(t, attemptScope.Failed(lease))
+
+		attemptScope.ReportFailure(lease)
+		selector.ReportFailure(lease)
+		require.True(t, attemptScope.Failed(lease))
+	}
+
+	require.Equal(t, []string{
+		"http://brightdata-one.example:8080",
+		"http://iproyal-one.example:8080",
+		"http://webshare-one.example:8080",
+		"http://webshare-two.example:8080",
+	}, proxyURLs)
+	require.True(t, attemptScope.Exhausted(selector.CandidateCount()))
+
+	_, err = attemptScope.AcquireRequired(selector)
+	require.ErrorIs(t, err, ErrProxyLeaseCandidatesExhausted)
+	require.ErrorContains(t, err, "all 4 configured proxy candidate(s) failed")
+}
+
+func TestProxyLeaseAttemptScopeHandlesNilAndInvalidBranches(t *testing.T) {
+	t.Parallel()
+
+	var nilScope *ProxyLeaseAttemptScope
+	require.False(t, nilScope.Failed(ProxyLease{ProxyURL: "http://proxy.example:8080"}))
+	require.False(t, nilScope.Exhausted(1))
+	require.NotPanics(t, func() { nilScope.ReportFailure(ProxyLease{ProxyURL: "http://proxy.example:8080"}) })
+
+	scope := NewProxyLeaseAttemptScope()
+	scope.ReportFailure(ProxyLease{})
+	require.False(t, scope.Failed(ProxyLease{}))
+	require.False(t, scope.Exhausted(0))
+
+	zeroValueScope := ProxyLeaseAttemptScope{}
+	zeroValueLease := ProxyLease{ProxyURL: "http://zero-value.example:8080"}
+	zeroValueScope.ReportFailure(zeroValueLease)
+	require.True(t, zeroValueScope.Failed(zeroValueLease))
+
+	var nilSelector *ProxyLeaseSelector
+	_, err := scope.AcquireRequired(nilSelector)
+	require.ErrorIs(t, err, ErrProxyLeaseUnavailable)
+	require.Equal(t, 0, nilSelector.CandidateCount())
+	require.ErrorIs(t, ProxyLeaseCandidatesExhaustedError(2), ErrProxyLeaseCandidatesExhausted)
+}
+
 func TestProxyLeaseUnavailableErrorWraps(t *testing.T) {
 	t.Parallel()
 

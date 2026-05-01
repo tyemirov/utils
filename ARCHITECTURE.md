@@ -9,6 +9,8 @@ only the helpers they need.
 - `browsertransport`: Shared proxy-aware browser and HTTP transport runtime for
   scraping workloads, including browser profiles, reusable sessions, SOCKS
   forwarding, and one-shot render helpers.
+- `crawler`: Shared crawling helpers, including provider/user-aware proxy lease
+  selection and operation-scoped failed-lease tracking for scrape batches.
 - `file`: Filesystem helpers (delete, close, read/write convenience).
 - `jseval`: Compatibility wrapper around `browsertransport` for one-shot page
   rendering.
@@ -39,6 +41,17 @@ only the helpers they need.
 - `jseval` stays as a compatibility layer so existing downstream callers can
   keep using `RenderPage` and `RenderPages` without depending on the richer
   transport API directly.
+
+## Crawler Proxy Rotation
+
+- `ProxyLeaseSelector` owns global provider/user rotation state. It keeps a
+  successful lease sticky until failure, then advances to the next provider
+  immediately while advancing the failed provider's next user for the next
+  return.
+- `ProxyLeaseAttemptScope` is caller-created for one scrape or request batch. It
+  remembers which leases failed during that operation, skips those leases on
+  later acquisitions, and returns `ErrProxyLeaseCandidatesExhausted` once every
+  configured candidate has failed.
 
 ## LLM Module (`llm`)
 
