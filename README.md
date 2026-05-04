@@ -27,6 +27,17 @@ Reusable crawler primitives for proxy-aware scraping workloads.
   batch so callers can skip candidates that already failed during that
   operation and stop with a typed exhausted-candidates error.
 
+## Configfile
+Strict YAML configuration loading for applications.
+
+- **LoadYAML(path string, target any) error** - Read a YAML config file, expand
+  environment variables only inside YAML scalar values, reject missing
+  environment variables, and decode with known-field validation.
+- **LoadYAMLBytes(configPayload []byte, target any) error** - Apply the same
+  contract to already-read YAML bytes.
+- **InterpolateYAML(configPayload []byte) ([]byte, error)** - Expand YAML scalar
+  environment references before application-specific decoding.
+
 ## JSEval
 Compatibility wrapper around `browsertransport` for existing callers that only
 need one-shot page rendering.

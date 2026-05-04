@@ -9,6 +9,9 @@ only the helpers they need.
 - `browsertransport`: Shared proxy-aware browser and HTTP transport runtime for
   scraping workloads, including browser profiles, reusable sessions, SOCKS
   forwarding, and one-shot render helpers.
+- `configfile`: Strict YAML config loading with scalar-only environment
+  interpolation, explicit missing-variable errors, no default-substitution
+  syntax, and known-field decoding.
 - `crawler`: Shared crawling helpers, including provider/user-aware proxy lease
   selection and operation-scoped failed-lease tracking for scrape batches.
 - `file`: Filesystem helpers (delete, close, read/write convenience).
