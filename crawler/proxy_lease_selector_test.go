@@ -44,6 +44,33 @@ func TestProxyLeaseSelectorAcquiresDistinctLeasesAndReusesReleasedSuccess(t *tes
 	require.Equal(t, firstLease.ProxyURL, reusedLease.ProxyURL)
 }
 
+func TestProxyLeaseSelectorAcquireForRequestReusesAttachedLease(t *testing.T) {
+	t.Parallel()
+
+	selector, err := NewProxyLeaseSelector([]ProxyRotationProviderConfig{{
+		Name: "provider-one",
+		Users: []ProxyRotationUserConfig{
+			{Name: "user-one", URL: "http://provider-one-user-one.example:8080"},
+			{Name: "user-two", URL: "http://provider-one-user-two.example:8080"},
+		},
+	}})
+	require.NoError(t, err)
+	request, err := http.NewRequest(http.MethodGet, "https://example.com/product", nil)
+	require.NoError(t, err)
+	firstLease, err := selector.AcquireForRequest(request)
+	require.NoError(t, err)
+
+	redirectRequest := request.Clone(request.Context())
+	redirectLease, err := selector.AcquireForRequest(redirectRequest)
+	require.NoError(t, err)
+
+	require.Equal(t, firstLease, redirectLease)
+	selector.ReportSuccess(firstLease)
+	nextLease, err := selector.AcquireRequired()
+	require.NoError(t, err)
+	require.Equal(t, firstLease.ProxyURL, nextLease.ProxyURL)
+}
+
 func TestProxyLeaseSelectorRotatesProviderImmediatelyAndAdvancesUserOnReturn(t *testing.T) {
 	t.Parallel()
 

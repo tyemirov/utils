@@ -249,6 +249,9 @@ func (selector *ProxyLeaseSelector) CandidateCount() int {
 // AcquireForRequest reserves a lease and attaches it to the request context for
 // HTTP and Colly callers.
 func (selector *ProxyLeaseSelector) AcquireForRequest(request *http.Request) (ProxyLease, error) {
+	if selection, found := SelectedProxySelection(request); found {
+		return selection, nil
+	}
 	lease, err := selector.AcquireRequired()
 	if err != nil {
 		return ProxyLease{}, err
