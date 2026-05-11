@@ -69,9 +69,26 @@ func (transport *proxySelectionTrackingTransport) RoundTrip(request *http.Reques
 		trackedProxySelectionLinks.Store(linkID, requestID)
 	}
 	updatedRequest := request.Clone(updatedContext)
+	attachStoredProxySelection(updatedRequest, requestID)
 	updatedRequest.Header.Del(proxySelectionTrackingHeader)
 	updatedRequest.Header.Del(proxySelectionTrackingLinkHeader)
 	return transport.base.RoundTrip(updatedRequest)
+}
+
+func attachStoredProxySelection(request *http.Request, requestID string) {
+	if request == nil || strings.TrimSpace(requestID) == "" {
+		return
+	}
+	storedSelection, found := trackedProxySelections.Load(strings.TrimSpace(requestID))
+	if !found {
+		return
+	}
+	switch selection := storedSelection.(type) {
+	case ProxySelection:
+		AttachProxySelection(request, selection)
+	case string:
+		AttachProxySelection(request, ProxySelection{ProxyURL: strings.TrimSpace(selection)})
+	}
 }
 
 func wrapHTTPTransportProxySelector(transport *http.Transport) {

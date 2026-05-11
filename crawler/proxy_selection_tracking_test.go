@@ -140,6 +140,54 @@ func TestProxySelectionTrackingBoundaryBranches(t *testing.T) {
 	require.Equal(t, "request-one", trackedRequestID)
 }
 
+func TestProxySelectionTrackingTransportAttachesStoredSelection(t *testing.T) {
+	storedSelection := ProxySelection{
+		ProviderName: "provider-one",
+		UserName:     "user-one",
+		ProxyURL:     "http://provider-one.example:8080",
+		Generation:   3,
+	}
+	trackedProxySelections.Store("request-one", storedSelection)
+	defer trackedProxySelections.Delete("request-one")
+
+	transport := &proxySelectionTrackingTransport{base: proxyTrackingRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+		selection, found := SelectedProxySelection(request)
+		require.True(t, found)
+		require.Equal(t, storedSelection, selection)
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{},
+			Body:       io.NopCloser(strings.NewReader("ok")),
+			Request:    request,
+		}, nil
+	})}
+
+	request, err := http.NewRequest(http.MethodGet, "http://example.com", nil)
+	require.NoError(t, err)
+	request.Header.Set(proxySelectionTrackingHeader, "request-one")
+
+	response, err := transport.RoundTrip(request)
+	require.NoError(t, err)
+	require.NoError(t, response.Body.Close())
+}
+
+func TestAttachStoredProxySelectionBoundaryBranches(t *testing.T) {
+	attachStoredProxySelection(nil, "request-one")
+	request, err := http.NewRequest(http.MethodGet, "http://example.com", nil)
+	require.NoError(t, err)
+	attachStoredProxySelection(request, " ")
+	attachStoredProxySelection(request, "missing")
+	_, found := SelectedProxySelection(request)
+	require.False(t, found)
+
+	trackedProxySelections.Store("string-request", " http://string-proxy.example:8080 ")
+	defer trackedProxySelections.Delete("string-request")
+	attachStoredProxySelection(request, "string-request")
+	selection, found := SelectedProxySelection(request)
+	require.True(t, found)
+	require.Equal(t, "http://string-proxy.example:8080", selection.ProxyURL)
+}
+
 func TestTrackSelectedProxyURLBoundaryBranches(t *testing.T) {
 	wrapHTTPTransportProxySelector(nil)
 	wrapHTTPTransportProxySelector(&http.Transport{})
