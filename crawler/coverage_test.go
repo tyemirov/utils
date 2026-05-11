@@ -1513,6 +1513,34 @@ func TestRecordProxyFailureNonZeroStatusCode(t *testing.T) {
 	require.Empty(t, tracker.failures)
 }
 
+func TestRecordProxyFailureNeutralStatusReleasesTrackedLease(t *testing.T) {
+	selector, err := NewProxyLeaseSelector([]ProxyRotationProviderConfig{{
+		Name: "provider-one",
+		Users: []ProxyRotationUserConfig{
+			{Name: "user-one", URL: "http://proxy-one:8080"},
+			{Name: "user-two", URL: "http://proxy-two:8080"},
+		},
+	}})
+	require.NoError(t, err)
+	lease, err := selector.AcquireRequired()
+	require.NoError(t, err)
+
+	resp := &colly.Response{
+		StatusCode: http.StatusNotFound,
+		Request: &colly.Request{
+			ProxyURL: lease.ProxyURL,
+			Ctx:      colly.NewContext(),
+		},
+	}
+	attachTrackedProxySelection(resp.Request, lease)
+
+	recordProxyFailure(selector, resp)
+
+	nextLease, err := selector.AcquireRequired()
+	require.NoError(t, err)
+	require.Equal(t, lease.ProxyURL, nextLease.ProxyURL)
+}
+
 func TestRecordProxyFailureBadGatewayStatusCode(t *testing.T) {
 	tracker := &trackingProxyHealth{}
 	resp := &colly.Response{

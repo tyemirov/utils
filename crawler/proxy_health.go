@@ -18,6 +18,10 @@ type proxyLeaseReporter interface {
 	ReportCriticalFailure(lease ProxyLease)
 }
 
+type proxyLeaseReleaser interface {
+	Release(lease ProxyLease)
+}
+
 type proxyHealthTracker struct {
 	logger           Logger
 	mu               sync.Mutex

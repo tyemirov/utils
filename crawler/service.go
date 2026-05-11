@@ -337,6 +337,11 @@ func recordProxyFailure(tracker proxyHealth, resp *colly.Response) {
 		return
 	}
 	if !shouldRecordProxyFailure(resp.StatusCode) {
+		if lease, found := selectedProxySelectionFromResponse(resp); found {
+			if releaser, ok := tracker.(proxyLeaseReleaser); ok {
+				releaser.Release(lease)
+			}
+		}
 		return
 	}
 	if lease, found := selectedProxySelectionFromResponse(resp); found {
