@@ -73,10 +73,6 @@ func NewService(cfg Config, results chan<- *Result, options ...ServiceOption) (*
 
 	responseProcessor := newResponseProcessor(cfg, retryHandler, proxyTracker, filePersister, results, logger)
 
-	requestConfigurator.Configure(collector)
-	setupErrorHandling(collector, responseProcessor, retryHandler, proxyTracker, logger)
-	responseProcessor.Setup(collector)
-
 	service := &Service{
 		config:              cfg,
 		collector:           collector,
@@ -95,6 +91,7 @@ func NewService(cfg Config, results chan<- *Result, options ...ServiceOption) (*
 		option(service)
 	}
 
+	requestConfigurator.Configure(collector)
 	bindResponseHandlersRuntime(service.responseHandlers, collector, filePersister, retryHandler)
 	responseProcessor.SetResultCallback(service.releaseProductSlot)
 	responseProcessor.SetResponseHandlers(service.responseHandlers)
@@ -102,7 +99,11 @@ func NewService(cfg Config, results chan<- *Result, options ...ServiceOption) (*
 	contextTransport := newContextAwareTransport(transport, service.currentRunContext)
 	panicSafeTransport := newPanicSafeTransport(contextTransport, logger)
 	collector.WithTransport(panicSafeTransport)
+	httpTransport, _ := transport.(*http.Transport)
+	installProxySelectionTracking(collector, httpTransport, panicSafeTransport)
 
+	setupErrorHandling(collector, responseProcessor, retryHandler, proxyTracker, logger)
+	responseProcessor.Setup(collector)
 	service.serviceHook.AfterInit(collector, panicSafeTransport)
 
 	return service, nil
@@ -216,30 +217,53 @@ func newCollector(cfg Config, logger Logger) (*colly.Collector, proxyHealth, htt
 
 	_ = webCollector.Limit(limitRule)
 
-	var tracker proxyHealth
-	proxyHealthEnabled := cfg.Scraper.ProxyCircuitBreakerEnabled
-	switch len(cfg.Scraper.ProxyList) {
-	case 0:
-	case 1:
-		proxyFn, err := newProxyRotator(cfg.Scraper.ProxyList, nil, logger)
-		if err != nil {
-			return nil, nil, nil, err
-		}
-		webCollector.SetProxyFunc(proxyFn)
-	default:
-		if proxyHealthEnabled {
-			tracker = newProxyHealthTracker(cfg.Scraper.ProxyList, logger)
-		}
-		proxyFn, err := newProxyRotator(cfg.Scraper.ProxyList, tracker, logger)
-		if err != nil {
-			return nil, nil, nil, err
-		}
-		webCollector.SetProxyFunc(proxyFn)
+	proxySelector, err := proxyLeaseSelectorForScraper(cfg.Scraper, logger)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	if proxySelector != nil {
+		webCollector.SetProxyFunc(proxySelector.Select)
 	}
 
 	cookieJar, _ := cookiejar.New(nil)
 	webCollector.SetCookieJar(cookieJar)
-	return webCollector, tracker, transport, nil
+	return webCollector, proxySelector, transport, nil
+}
+
+func proxyLeaseSelectorForScraper(scraper ScraperConfig, logger Logger) (*ProxyLeaseSelector, error) {
+	if scraper.ProxyLeaseSelector != nil {
+		return scraper.ProxyLeaseSelector, nil
+	}
+	if len(scraper.ProxyList) == 0 {
+		return nil, nil
+	}
+	providers := []ProxyRotationProviderConfig{{
+		Name:  "flat",
+		Users: proxyUsersFromFlatList(scraper.ProxyList),
+	}}
+	selector, err := NewProxyLeaseSelectorWithOptions(
+		providers,
+		ProxyLeaseSelectorCircuitBreaker(scraper.ProxyCircuitBreakerEnabled),
+		ProxyLeaseSelectorLogger(logger),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("crawler: build proxy selector: %w", err)
+	}
+	if selector == nil {
+		return nil, fmt.Errorf("%w: proxy list is empty", ErrProxyLeaseUnavailable)
+	}
+	return selector, nil
+}
+
+func proxyUsersFromFlatList(proxyURLs []string) []ProxyRotationUserConfig {
+	users := make([]ProxyRotationUserConfig, 0, len(proxyURLs))
+	for index, proxyURL := range proxyURLs {
+		users = append(users, ProxyRotationUserConfig{
+			Name: fmt.Sprintf("proxy-%d", index+1),
+			URL:  proxyURL,
+		})
+	}
+	return users
 }
 
 func shouldOverrideCollectorRequestTimeout(timeout time.Duration) bool {
@@ -312,10 +336,25 @@ func recordProxyFailure(tracker proxyHealth, resp *colly.Response) {
 	if resp.Request.ProxyURL == "" {
 		return
 	}
-	if resp.StatusCode != 0 {
+	if !shouldRecordProxyFailure(resp.StatusCode) {
 		return
 	}
+	if lease, found := selectedProxySelectionFromResponse(resp); found {
+		if reporter, ok := tracker.(proxyLeaseReporter); ok {
+			reporter.ReportFailure(lease)
+			return
+		}
+	}
 	tracker.RecordFailure(resp.Request.ProxyURL)
+}
+
+func shouldRecordProxyFailure(statusCode int) bool {
+	switch statusCode {
+	case 0, http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+		return true
+	default:
+		return false
+	}
 }
 
 func (service *Service) reserveProductSlot(ctx context.Context, productID string) error {

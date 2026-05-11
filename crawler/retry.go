@@ -30,7 +30,7 @@ func newRetryHandler(scraper ScraperConfig, logger Logger) RetryHandler {
 	return &retryHandler{
 		maxRetries:    scraper.RetryCount,
 		logger:        logger,
-		proxyPoolSize: len(scraper.ProxyList),
+		proxyPoolSize: scraper.ProxyCandidateCount(),
 		sleepFn:       time.Sleep,
 	}
 }

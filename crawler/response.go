@@ -215,6 +215,12 @@ func (processor *responseProcessor) recordProxySuccess(resp *colly.Response) {
 	if processor.proxyTracker == nil || proxyURL == "" {
 		return
 	}
+	if lease, found := selectedProxySelectionFromResponse(resp); found {
+		if reporter, ok := processor.proxyTracker.(proxyLeaseReporter); ok {
+			reporter.ReportSuccess(lease)
+			return
+		}
+	}
 	processor.proxyTracker.RecordSuccess(proxyURL)
 }
 
@@ -237,16 +243,23 @@ func (processor *responseProcessor) retryByDecision(resp *colly.Response, decisi
 }
 
 func (processor *responseProcessor) alternativeProxyRetryCount() int {
-	if len(processor.scraperConfig.ProxyList) <= 1 {
+	proxyCandidateCount := processor.scraperConfig.ProxyCandidateCount()
+	if proxyCandidateCount <= 1 {
 		return 0
 	}
-	return len(processor.scraperConfig.ProxyList) - 1
+	return proxyCandidateCount - 1
 }
 
 func (processor *responseProcessor) recordCriticalProxyFailure(resp *colly.Response) {
 	proxyURL := responseProxyURL(resp)
 	if processor.proxyTracker == nil || proxyURL == "" {
 		return
+	}
+	if lease, found := selectedProxySelectionFromResponse(resp); found {
+		if reporter, ok := processor.proxyTracker.(proxyLeaseReporter); ok {
+			reporter.ReportCriticalFailure(lease)
+			return
+		}
 	}
 	processor.proxyTracker.RecordCriticalFailure(proxyURL)
 }
@@ -256,6 +269,13 @@ func responseProxyURL(resp *colly.Response) string {
 		return ""
 	}
 	return strings.TrimSpace(resp.Request.ProxyURL)
+}
+
+func selectedProxySelectionFromResponse(resp *colly.Response) (ProxySelection, bool) {
+	if resp == nil {
+		return ProxySelection{}, false
+	}
+	return selectedProxySelectionFromCollyRequest(resp.Request)
 }
 
 func (processor *responseProcessor) inferRedirect(productID, originalURL, finalURL, canonicalURL string, ctx *colly.Context) {

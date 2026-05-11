@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/gocolly/colly/v2"
 )
@@ -65,6 +66,46 @@ type proxyRotationProvider struct {
 	nextUser int
 }
 
+type proxyLeaseSelectorOptions struct {
+	circuitBreakerEnabled bool
+	startProviderIndex    int
+	hasStartProviderIndex bool
+	logger                Logger
+	now                   func() time.Time
+}
+
+// ProxyLeaseSelectorOption configures proxy lease selector runtime behavior.
+type ProxyLeaseSelectorOption func(*proxyLeaseSelectorOptions)
+
+// ProxyLeaseSelectorCircuitBreaker enables or disables cooldown tracking.
+func ProxyLeaseSelectorCircuitBreaker(enabled bool) ProxyLeaseSelectorOption {
+	return func(options *proxyLeaseSelectorOptions) {
+		options.circuitBreakerEnabled = enabled
+	}
+}
+
+// ProxyLeaseSelectorStartProvider sets the initial active provider index.
+func ProxyLeaseSelectorStartProvider(index int) ProxyLeaseSelectorOption {
+	return func(options *proxyLeaseSelectorOptions) {
+		options.startProviderIndex = index
+		options.hasStartProviderIndex = true
+	}
+}
+
+// ProxyLeaseSelectorLogger sets the selector logger used for cooldown notices.
+func ProxyLeaseSelectorLogger(logger Logger) ProxyLeaseSelectorOption {
+	return func(options *proxyLeaseSelectorOptions) {
+		options.logger = logger
+	}
+}
+
+// ProxyLeaseSelectorClock injects the selector clock for deterministic tests.
+func ProxyLeaseSelectorClock(now func() time.Time) ProxyLeaseSelectorOption {
+	return func(options *proxyLeaseSelectorOptions) {
+		options.now = now
+	}
+}
+
 // ProxyLeaseSelector acquires proxy leases from ordered providers and keeps
 // successful leases sticky until a failure advances rotation.
 type ProxyLeaseSelector struct {
@@ -74,6 +115,7 @@ type ProxyLeaseSelector struct {
 	activeProvider   int
 	generation       uint64
 	reservations     map[string]int
+	healthTracker    *proxyHealthTracker
 }
 
 // ProxyLeaseAttemptScope tracks failed proxy leases for one scrape, request
@@ -85,8 +127,22 @@ type ProxyLeaseAttemptScope struct {
 
 // NewProxyLeaseSelector constructs a provider-aware lease selector.
 func NewProxyLeaseSelector(configs []ProxyRotationProviderConfig) (*ProxyLeaseSelector, error) {
+	return NewProxyLeaseSelectorWithOptions(configs)
+}
+
+// NewProxyLeaseSelectorWithOptions constructs a provider-aware lease selector
+// with runtime options such as cooldowns and initial provider position.
+func NewProxyLeaseSelectorWithOptions(configs []ProxyRotationProviderConfig, optionList ...ProxyLeaseSelectorOption) (*ProxyLeaseSelector, error) {
+	options := proxyLeaseSelectorOptions{}
+	for _, option := range optionList {
+		if option != nil {
+			option(&options)
+		}
+	}
+
 	providers := make([]proxyRotationProvider, 0, len(configs))
 	selectionByProxy := make(map[string]proxySelectionIndex)
+	proxyURLs := make([]string, 0)
 	for _, providerConfig := range configs {
 		providerName := strings.TrimSpace(providerConfig.Name)
 		if providerName == "" {
@@ -120,6 +176,7 @@ func NewProxyLeaseSelector(configs []ProxyRotationProviderConfig) (*ProxyLeaseSe
 				raw:    trimmedProxyURL,
 				parsed: parsedProxyURL,
 			})
+			proxyURLs = append(proxyURLs, trimmedProxyURL)
 		}
 		if len(users) == 0 {
 			continue
@@ -132,10 +189,26 @@ func NewProxyLeaseSelector(configs []ProxyRotationProviderConfig) (*ProxyLeaseSe
 	if len(providers) == 0 {
 		return nil, nil
 	}
+
+	activeProvider := 0
+	if options.hasStartProviderIndex {
+		activeProvider = normalizeProxyProviderIndex(options.startProviderIndex, len(providers))
+	}
+
+	var healthTracker *proxyHealthTracker
+	if options.circuitBreakerEnabled {
+		healthTracker = newProxyHealthTracker(proxyURLs, options.logger)
+		if options.now != nil {
+			healthTracker.now = options.now
+		}
+	}
+
 	return &ProxyLeaseSelector{
 		providers:        providers,
 		selectionByProxy: selectionByProxy,
+		activeProvider:   activeProvider,
 		reservations:     map[string]int{},
+		healthTracker:    healthTracker,
 	}, nil
 }
 
@@ -147,28 +220,14 @@ func NewProxyLeaseAttemptScope() *ProxyLeaseAttemptScope {
 
 // Acquire reserves and returns the best current proxy lease.
 func (selector *ProxyLeaseSelector) Acquire() ProxyLease {
-	if selector == nil {
-		return ProxyLease{}
-	}
-
-	selector.mu.Lock()
-	defer selector.mu.Unlock()
-
-	lease := selector.acquireLocked()
-	if lease.Valid() {
-		selector.reservations[lease.ProxyURL]++
-	}
+	lease, _ := selector.acquire()
 	return lease
 }
 
 // AcquireRequired reserves and returns a proxy lease or a typed unavailable
 // error when no proxy is configured.
 func (selector *ProxyLeaseSelector) AcquireRequired() (ProxyLease, error) {
-	lease := selector.Acquire()
-	if !lease.Valid() {
-		return ProxyLease{}, fmt.Errorf("%w: no proxy providers configured", ErrProxyLeaseUnavailable)
-	}
-	return lease, nil
+	return selector.acquire()
 }
 
 // CandidateCount returns the number of configured proxy candidates.
@@ -198,6 +257,16 @@ func (selector *ProxyLeaseSelector) AcquireForRequest(request *http.Request) (Pr
 	return lease, nil
 }
 
+// Select returns the currently active provider/user tuple as a Colly proxy
+// function.
+func (selector *ProxyLeaseSelector) Select(request *http.Request) (*url.URL, error) {
+	lease, err := selector.AcquireForRequest(request)
+	if err != nil {
+		return nil, err
+	}
+	return lease.proxyURL()
+}
+
 // Release releases a previously acquired lease reservation without reporting
 // success or failure.
 func (selector *ProxyLeaseSelector) Release(lease ProxyLease) {
@@ -213,6 +282,15 @@ func (selector *ProxyLeaseSelector) Release(lease ProxyLease) {
 
 // ReportFailure releases a lease and rotates immediately to the next provider.
 func (selector *ProxyLeaseSelector) ReportFailure(lease ProxyLease) {
+	selector.reportFailure(lease, false)
+}
+
+// ReportCriticalFailure releases a lease and immediately cools the proxy.
+func (selector *ProxyLeaseSelector) ReportCriticalFailure(lease ProxyLease) {
+	selector.reportFailure(lease, true)
+}
+
+func (selector *ProxyLeaseSelector) reportFailure(lease ProxyLease, critical bool) {
 	if selector == nil || !lease.Valid() {
 		return
 	}
@@ -222,7 +300,15 @@ func (selector *ProxyLeaseSelector) ReportFailure(lease ProxyLease) {
 
 	selector.releaseLocked(lease)
 	selectionIndex, found := selector.selectionByProxy[strings.TrimSpace(lease.ProxyURL)]
-	if !found || lease.Generation != selector.generation {
+	if !found {
+		return
+	}
+	if critical {
+		selector.recordCriticalFailureLocked(lease.ProxyURL)
+	} else {
+		selector.recordFailureLocked(lease.ProxyURL)
+	}
+	if lease.Generation != selector.generation {
 		return
 	}
 
@@ -253,6 +339,7 @@ func (selector *ProxyLeaseSelector) ReportSuccess(lease ProxyLease) {
 	if !found || lease.Generation != selector.generation {
 		return
 	}
+	selector.recordSuccessLocked(lease.ProxyURL)
 
 	provider := &selector.providers[selectionIndex.provider]
 	activeUserIndex := provider.nextUser % len(provider.users)
@@ -280,6 +367,25 @@ func (selector *ProxyLeaseSelector) RecordSuccess(proxyURL string) {
 		return
 	}
 	selector.ReportSuccess(selection)
+}
+
+// RecordCriticalFailure keeps string-only callers compatible.
+func (selector *ProxyLeaseSelector) RecordCriticalFailure(proxyURL string) {
+	selection, found := selector.SelectionForProxyURL(proxyURL)
+	if !found {
+		return
+	}
+	selector.ReportCriticalFailure(selection)
+}
+
+// IsAvailable reports whether a proxy is outside cooldown.
+func (selector *ProxyLeaseSelector) IsAvailable(proxyURL string) bool {
+	if selector == nil || strings.TrimSpace(proxyURL) == "" {
+		return true
+	}
+	selector.mu.Lock()
+	defer selector.mu.Unlock()
+	return selector.isAvailableLocked(proxyURL)
 }
 
 // SelectionForProxyURL returns the current-generation selection metadata for a
@@ -389,6 +495,29 @@ func proxyLeaseAttemptScopeKey(lease ProxyLease) string {
 	}, "\x00")
 }
 
+func (selector *ProxyLeaseSelector) acquire() (ProxyLease, error) {
+	if selector == nil {
+		return ProxyLease{}, fmt.Errorf("%w: no proxy providers configured", ErrProxyLeaseUnavailable)
+	}
+
+	selector.mu.Lock()
+	defer selector.mu.Unlock()
+
+	if len(selector.providers) == 0 {
+		return ProxyLease{}, fmt.Errorf("%w: no proxy providers configured", ErrProxyLeaseUnavailable)
+	}
+	candidateCount := selector.candidateCountLocked()
+	if candidateCount == 0 {
+		return ProxyLease{}, fmt.Errorf("%w: no proxy providers configured", ErrProxyLeaseUnavailable)
+	}
+	lease := selector.acquireLocked()
+	if !lease.Valid() {
+		return ProxyLease{}, ProxyLeaseCandidatesExhaustedError(candidateCount)
+	}
+	selector.reservations[lease.ProxyURL]++
+	return lease, nil
+}
+
 func (selector *ProxyLeaseSelector) acquireLocked() ProxyLease {
 	if len(selector.providers) == 0 {
 		return ProxyLease{}
@@ -407,7 +536,7 @@ func (selector *ProxyLeaseSelector) acquireLocked() ProxyLease {
 		}
 	}
 
-	return selector.leastReservedLeaseLocked()
+	return ProxyLease{}
 }
 
 func (selector *ProxyLeaseSelector) firstUnreservedLeaseFromProviderLocked(providerIndex int) (ProxyLease, bool) {
@@ -430,38 +559,12 @@ func (selector *ProxyLeaseSelector) firstUnreservedLeaseFromProviderLocked(provi
 		if selector.reservations[candidateUser.raw] > 0 {
 			continue
 		}
+		if !selector.isAvailableLocked(candidateUser.raw) {
+			continue
+		}
 		return selector.leaseForProviderUser(provider, candidateUser), true
 	}
 	return ProxyLease{}, false
-}
-
-func (selector *ProxyLeaseSelector) leastReservedLeaseLocked() ProxyLease {
-	fallbackLease := ProxyLease{}
-	fallbackReservations := 0
-	fallbackSet := false
-	for providerOffset := 0; providerOffset < len(selector.providers); providerOffset++ {
-		providerIndex := (selector.activeProvider + providerOffset) % len(selector.providers)
-		provider := selector.providers[providerIndex]
-		if len(provider.users) == 0 {
-			continue
-		}
-		userIndex := provider.nextUser
-		if userIndex < 0 || userIndex >= len(provider.users) {
-			userIndex = 0
-		}
-		for userOffset := 0; userOffset < len(provider.users); userOffset++ {
-			candidateUserIndex := (userIndex + userOffset) % len(provider.users)
-			candidateUser := provider.users[candidateUserIndex]
-			reservations := selector.reservations[candidateUser.raw]
-			if fallbackSet && reservations >= fallbackReservations {
-				continue
-			}
-			fallbackLease = selector.leaseForProviderUser(provider, candidateUser)
-			fallbackReservations = reservations
-			fallbackSet = true
-		}
-	}
-	return fallbackLease
 }
 
 func (selector *ProxyLeaseSelector) leaseForProviderUser(provider proxyRotationProvider, user proxyRotationUser) ProxyLease {
@@ -473,6 +576,44 @@ func (selector *ProxyLeaseSelector) leaseForProviderUser(provider proxyRotationP
 	}
 }
 
+func (lease ProxyLease) proxyURL() (*url.URL, error) {
+	parsedProxyURL, err := url.Parse(lease.ProxyURL)
+	if err != nil {
+		return nil, fmt.Errorf("proxy lease selector: invalid selected proxy URL %q: %w", lease.ProxyURL, err)
+	}
+	return parsedProxyURL, nil
+}
+
+func (selector *ProxyLeaseSelector) candidateCountLocked() int {
+	candidateCount := 0
+	for _, provider := range selector.providers {
+		candidateCount += len(provider.users)
+	}
+	return candidateCount
+}
+
+func (selector *ProxyLeaseSelector) isAvailableLocked(proxyURL string) bool {
+	return selector.healthTracker == nil || selector.healthTracker.IsAvailable(proxyURL)
+}
+
+func (selector *ProxyLeaseSelector) recordSuccessLocked(proxyURL string) {
+	if selector.healthTracker != nil {
+		selector.healthTracker.RecordSuccess(proxyURL)
+	}
+}
+
+func (selector *ProxyLeaseSelector) recordFailureLocked(proxyURL string) {
+	if selector.healthTracker != nil {
+		selector.healthTracker.RecordFailure(proxyURL)
+	}
+}
+
+func (selector *ProxyLeaseSelector) recordCriticalFailureLocked(proxyURL string) {
+	if selector.healthTracker != nil {
+		selector.healthTracker.RecordCriticalFailure(proxyURL)
+	}
+}
+
 func (selector *ProxyLeaseSelector) releaseLocked(lease ProxyLease) {
 	reservations := selector.reservations[strings.TrimSpace(lease.ProxyURL)]
 	switch {
@@ -481,6 +622,13 @@ func (selector *ProxyLeaseSelector) releaseLocked(lease ProxyLease) {
 	default:
 		selector.reservations[strings.TrimSpace(lease.ProxyURL)] = reservations - 1
 	}
+}
+
+func normalizeProxyProviderIndex(index int, providerCount int) int {
+	if providerCount <= 0 {
+		return 0
+	}
+	return ((index % providerCount) + providerCount) % providerCount
 }
 
 // ProxyRotationSelector keeps one (provider, user) selection sticky until a
@@ -507,17 +655,11 @@ func (selector *ProxyRotationSelector) Select(request *http.Request) (*url.URL, 
 	if selector == nil || selector.leaseSelector == nil {
 		return nil, nil
 	}
-
-	lease := selector.leaseSelector.Acquire()
-	if !lease.Valid() {
+	proxyURL, err := selector.leaseSelector.Select(request)
+	if errors.Is(err, ErrProxyLeaseUnavailable) {
 		return nil, nil
 	}
-	AttachProxySelection(request, lease)
-	parsedProxyURL, err := url.Parse(lease.ProxyURL)
-	if err != nil {
-		return nil, fmt.Errorf("proxy rotation selector: invalid selected proxy URL %q: %w", lease.ProxyURL, err)
-	}
-	return parsedProxyURL, nil
+	return proxyURL, err
 }
 
 // RecordFailure keeps string-only callers compatible.
@@ -543,6 +685,14 @@ func (selector *ProxyRotationSelector) RecordProxyFailure(selection ProxySelecti
 		return
 	}
 	selector.leaseSelector.ReportFailure(selection)
+}
+
+// RecordProxyCriticalFailure cools the selected proxy immediately.
+func (selector *ProxyRotationSelector) RecordProxyCriticalFailure(selection ProxySelection) {
+	if selector == nil || selector.leaseSelector == nil {
+		return
+	}
+	selector.leaseSelector.ReportCriticalFailure(selection)
 }
 
 // RecordProxySuccess makes the successful provider/user tuple sticky until the

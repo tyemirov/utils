@@ -75,8 +75,17 @@ type ScraperConfig struct {
 	InsecureSkipVerify         bool
 	RateLimit                  time.Duration
 	ProxyList                  []string
+	ProxyLeaseSelector         *ProxyLeaseSelector
 	SaveFiles                  bool
 	ProxyCircuitBreakerEnabled bool
+}
+
+// ProxyCandidateCount reports the configured proxy candidate count.
+func (cfg ScraperConfig) ProxyCandidateCount() int {
+	if cfg.ProxyLeaseSelector != nil {
+		return cfg.ProxyLeaseSelector.CandidateCount()
+	}
+	return len(cfg.ProxyList)
 }
 
 // Validate checks that essential numeric fields are positive.
