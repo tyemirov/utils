@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/gocolly/colly/v2"
 	"github.com/stretchr/testify/require"
@@ -41,6 +42,33 @@ func TestProxyLeaseSelectorAcquiresDistinctLeasesAndReusesReleasedSuccess(t *tes
 	reusedLease := selector.Acquire()
 
 	require.Equal(t, firstLease.ProxyURL, reusedLease.ProxyURL)
+}
+
+func TestProxyLeaseSelectorAcquireForRequestReusesAttachedLease(t *testing.T) {
+	t.Parallel()
+
+	selector, err := NewProxyLeaseSelector([]ProxyRotationProviderConfig{{
+		Name: "provider-one",
+		Users: []ProxyRotationUserConfig{
+			{Name: "user-one", URL: "http://provider-one-user-one.example:8080"},
+			{Name: "user-two", URL: "http://provider-one-user-two.example:8080"},
+		},
+	}})
+	require.NoError(t, err)
+	request, err := http.NewRequest(http.MethodGet, "https://example.com/product", nil)
+	require.NoError(t, err)
+	firstLease, err := selector.AcquireForRequest(request)
+	require.NoError(t, err)
+
+	redirectRequest := request.Clone(request.Context())
+	redirectLease, err := selector.AcquireForRequest(redirectRequest)
+	require.NoError(t, err)
+
+	require.Equal(t, firstLease, redirectLease)
+	selector.ReportSuccess(firstLease)
+	nextLease, err := selector.AcquireRequired()
+	require.NoError(t, err)
+	require.Equal(t, firstLease.ProxyURL, nextLease.ProxyURL)
 }
 
 func TestProxyLeaseSelectorRotatesProviderImmediatelyAndAdvancesUserOnReturn(t *testing.T) {
@@ -166,15 +194,130 @@ func TestProxyLeaseSelectorValidationDuplicateAndReleaseBranches(t *testing.T) {
 
 	firstLease := selector.Acquire()
 	secondLease := selector.Acquire()
-	thirdLease := selector.Acquire()
 
 	require.Equal(t, "http://shared.example:8080", firstLease.ProxyURL)
 	require.Equal(t, "http://unique.example:8080", secondLease.ProxyURL)
-	require.Equal(t, "http://shared.example:8080", thirdLease.ProxyURL)
+
+	_, err = selector.AcquireRequired()
+	require.ErrorIs(t, err, ErrProxyLeaseCandidatesExhausted)
 
 	selector.Release(firstLease)
 	reusedLease := selector.Acquire()
 	require.Equal(t, firstLease.ProxyURL, reusedLease.ProxyURL)
+}
+
+func TestProxyLeaseSelectorCooldownSkipsPausedLeasesAndExhausts(t *testing.T) {
+	t.Parallel()
+
+	currentTime := time.Unix(0, 0)
+	selector, err := NewProxyLeaseSelectorWithOptions(
+		[]ProxyRotationProviderConfig{
+			{
+				Name: "provider-one",
+				Users: []ProxyRotationUserConfig{
+					{Name: "user-one", URL: "http://provider-one.example:8080"},
+					{Name: "user-two", URL: "http://provider-two.example:8080"},
+				},
+			},
+		},
+		ProxyLeaseSelectorCircuitBreaker(true),
+		ProxyLeaseSelectorClock(func() time.Time { return currentTime }),
+	)
+	require.NoError(t, err)
+
+	firstLease, err := selector.AcquireRequired()
+	require.NoError(t, err)
+	require.Equal(t, "http://provider-one.example:8080", firstLease.ProxyURL)
+
+	selector.ReportCriticalFailure(firstLease)
+	require.False(t, selector.IsAvailable(firstLease.ProxyURL))
+	require.True(t, selector.IsAvailable(""))
+	selector.RecordCriticalFailure("http://unknown.example:8080")
+
+	secondLease, err := selector.AcquireRequired()
+	require.NoError(t, err)
+	require.Equal(t, "http://provider-two.example:8080", secondLease.ProxyURL)
+
+	selector.ReportCriticalFailure(secondLease)
+	_, err = selector.AcquireRequired()
+	require.ErrorIs(t, err, ErrProxyLeaseCandidatesExhausted)
+
+	currentTime = currentTime.Add(defaultProxyCooldownBase + time.Second)
+	recoveredLease, err := selector.AcquireRequired()
+	require.NoError(t, err)
+	require.Equal(t, "http://provider-one.example:8080", recoveredLease.ProxyURL)
+	selector.ReportSuccess(recoveredLease)
+	require.True(t, selector.IsAvailable(recoveredLease.ProxyURL))
+
+	recoveredLease, err = selector.AcquireRequired()
+	require.NoError(t, err)
+	selector.RecordCriticalFailure(recoveredLease.ProxyURL)
+	require.False(t, selector.IsAvailable(recoveredLease.ProxyURL))
+}
+
+func TestProxyLeaseSelectorStartsAtConfiguredProvider(t *testing.T) {
+	t.Parallel()
+
+	selector, err := NewProxyLeaseSelectorWithOptions(
+		[]ProxyRotationProviderConfig{
+			{
+				Name: "provider-one",
+				Users: []ProxyRotationUserConfig{
+					{Name: "user-one", URL: "http://provider-one.example:8080"},
+				},
+			},
+			{
+				Name: "provider-two",
+				Users: []ProxyRotationUserConfig{
+					{Name: "user-one", URL: "http://provider-two.example:8080"},
+				},
+			},
+		},
+		ProxyLeaseSelectorStartProvider(1),
+	)
+	require.NoError(t, err)
+
+	lease, err := selector.AcquireRequired()
+	require.NoError(t, err)
+	require.Equal(t, "provider-two", lease.ProviderName)
+	require.Equal(t, "http://provider-two.example:8080", lease.ProxyURL)
+
+	selector, err = NewProxyLeaseSelectorWithOptions(
+		[]ProxyRotationProviderConfig{
+			{
+				Name: "provider-one",
+				Users: []ProxyRotationUserConfig{
+					{Name: "user-one", URL: "http://provider-one.example:8080"},
+				},
+			},
+		},
+		ProxyLeaseSelectorStartProvider(-1),
+	)
+	require.NoError(t, err)
+	lease, err = selector.AcquireRequired()
+	require.NoError(t, err)
+	require.Equal(t, "provider-one", lease.ProviderName)
+	require.Equal(t, 0, normalizeProxyProviderIndex(0, 0))
+}
+
+func TestProxyLeaseSelectorRecordsNonCriticalFailureWithCooldownTracker(t *testing.T) {
+	t.Parallel()
+
+	selector, err := NewProxyLeaseSelectorWithOptions(
+		[]ProxyRotationProviderConfig{{
+			Name: "provider-one",
+			Users: []ProxyRotationUserConfig{{
+				Name: "user-one",
+				URL:  "http://provider-one.example:8080",
+			}},
+		}},
+		ProxyLeaseSelectorCircuitBreaker(true),
+	)
+	require.NoError(t, err)
+	lease, err := selector.AcquireRequired()
+	require.NoError(t, err)
+
+	selector.ReportFailure(lease)
 }
 
 func TestProxyLeaseSelectorAcquireForRequestAttachesSelection(t *testing.T) {
@@ -221,6 +364,9 @@ func TestProxyLeaseSelectorCompatibilityStringReports(t *testing.T) {
 	selector.ReportSuccess(ProxyLease{})
 	selector.RecordFailure("http://unknown.example:8080")
 	selector.RecordSuccess("http://unknown.example:8080")
+	selector.RecordCriticalFailure("http://unknown.example:8080")
+	var nilSelector *ProxyLeaseSelector
+	nilSelector.RecordCriticalFailure("http://unknown.example:8080")
 	selector.RecordSuccess(lease.ProxyURL)
 
 	reusedLease := selector.Acquire()
@@ -313,6 +459,22 @@ func TestProxyLeaseUnavailableErrorWraps(t *testing.T) {
 	require.True(t, errors.Is(err, ErrProxyLeaseUnavailable))
 }
 
+func TestScraperConfigProxyCandidateCountPrefersSelector(t *testing.T) {
+	t.Parallel()
+
+	selector, err := NewProxyLeaseSelector([]ProxyRotationProviderConfig{{
+		Name: "provider-one",
+		Users: []ProxyRotationUserConfig{
+			{Name: "user-one", URL: "http://proxy-one.example:8080"},
+			{Name: "user-two", URL: "http://proxy-two.example:8080"},
+		},
+	}})
+	require.NoError(t, err)
+
+	require.Equal(t, 2, (ScraperConfig{ProxyLeaseSelector: selector, ProxyList: []string{"http://legacy.example:8080"}}).ProxyCandidateCount())
+	require.Equal(t, 1, (ScraperConfig{ProxyList: []string{"http://legacy.example:8080"}}).ProxyCandidateCount())
+}
+
 func TestProxyLeaseSelectorNilInvalidAndInternalFallbackBranches(t *testing.T) {
 	t.Parallel()
 
@@ -356,10 +518,11 @@ func TestProxyLeaseSelectorNilInvalidAndInternalFallbackBranches(t *testing.T) {
 
 	selector.reservations = map[string]int{"http://proxy-one.example:8080": 1}
 	lease := selector.Acquire()
-	require.Equal(t, "http://proxy-one.example:8080", lease.ProxyURL)
+	require.False(t, lease.Valid())
 
 	emptySelector := &ProxyLeaseSelector{reservations: map[string]int{}}
 	require.False(t, emptySelector.Acquire().Valid())
+	require.False(t, emptySelector.acquireLocked().Valid())
 
 	selection, found = selector.SelectionForProxyURL(" ")
 	require.False(t, found)
@@ -381,4 +544,10 @@ func TestProxyLeaseSelectorNilInvalidAndInternalFallbackBranches(t *testing.T) {
 	proxyURL, err := rotationSelector.Select(request)
 	require.Error(t, err)
 	require.Nil(t, proxyURL)
+
+	selector.recordFailureLocked("http://proxy-one.example:8080")
+	selector.recordSuccessLocked("http://proxy-one.example:8080")
+	selector.reservations = map[string]int{"http://proxy-one.example:8080": 2}
+	selector.Release(ProxyLease{ProxyURL: "http://proxy-one.example:8080"})
+	require.Equal(t, 1, selector.reservations["http://proxy-one.example:8080"])
 }

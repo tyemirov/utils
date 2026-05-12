@@ -699,6 +699,29 @@ func TestRecordProxySuccessWithTracker(t *testing.T) {
 	require.Equal(t, []string{"http://proxy:8080"}, tracker.successes)
 }
 
+func TestRecordProxySuccessWithLeaseReporter(t *testing.T) {
+	selector, err := NewProxyLeaseSelector([]ProxyRotationProviderConfig{{
+		Name: "provider-one",
+		Users: []ProxyRotationUserConfig{{
+			Name: "user-one",
+			URL:  "http://proxy:8080",
+		}},
+	}})
+	require.NoError(t, err)
+	lease, err := selector.AcquireRequired()
+	require.NoError(t, err)
+
+	processor := &responseProcessor{proxyTracker: selector}
+	resp := newTestResponse("PROD")
+	resp.Request.ProxyURL = lease.ProxyURL
+	attachTrackedProxySelection(resp.Request, lease)
+
+	processor.recordProxySuccess(resp)
+	reusedLease, err := selector.AcquireRequired()
+	require.NoError(t, err)
+	require.Equal(t, lease.ProxyURL, reusedLease.ProxyURL)
+}
+
 func TestRecordProxySuccessNoTracker(t *testing.T) {
 	processor := &responseProcessor{}
 	resp := newTestResponse("PROD")
@@ -712,6 +735,44 @@ func TestRecordProxySuccessEmptyProxyURL(t *testing.T) {
 	resp := newTestResponse("PROD")
 	processor.recordProxySuccess(resp)
 	require.Empty(t, tracker.successes)
+}
+
+func TestRecordCriticalProxyFailureWithLeaseReporter(t *testing.T) {
+	selector, err := NewProxyLeaseSelectorWithOptions(
+		[]ProxyRotationProviderConfig{{
+			Name: "provider-one",
+			Users: []ProxyRotationUserConfig{{
+				Name: "user-one",
+				URL:  "http://proxy:8080",
+			}},
+		}},
+		ProxyLeaseSelectorCircuitBreaker(true),
+		ProxyLeaseSelectorClock(func() time.Time { return time.Unix(0, 0) }),
+	)
+	require.NoError(t, err)
+	lease, err := selector.AcquireRequired()
+	require.NoError(t, err)
+
+	processor := &responseProcessor{proxyTracker: selector}
+	resp := newTestResponse("PROD")
+	resp.Request.ProxyURL = lease.ProxyURL
+	attachTrackedProxySelection(resp.Request, lease)
+
+	processor.recordCriticalProxyFailure(resp)
+	require.False(t, selector.IsAvailable(lease.ProxyURL))
+}
+
+func TestRecordCriticalProxyFailureBoundaryBranches(t *testing.T) {
+	processor := &responseProcessor{}
+	resp := newTestResponse("PROD")
+	resp.Request.ProxyURL = "http://proxy:8080"
+	require.NotPanics(t, func() { processor.recordCriticalProxyFailure(resp) })
+
+	tracker := &trackingProxyHealth{}
+	processor = &responseProcessor{proxyTracker: tracker}
+	resp.Request.ProxyURL = ""
+	processor.recordCriticalProxyFailure(resp)
+	require.Empty(t, tracker.criticalFailures)
 }
 
 func TestRetryByDecisionNilHandler(t *testing.T) {
@@ -1445,11 +1506,76 @@ func TestRecordProxyFailureEmptyProxyURL(t *testing.T) {
 func TestRecordProxyFailureNonZeroStatusCode(t *testing.T) {
 	tracker := &trackingProxyHealth{}
 	resp := &colly.Response{
-		StatusCode: http.StatusBadGateway,
+		StatusCode: http.StatusBadRequest,
 		Request:    &colly.Request{ProxyURL: "http://proxy:8080"},
 	}
 	recordProxyFailure(tracker, resp)
 	require.Empty(t, tracker.failures)
+}
+
+func TestRecordProxyFailureNeutralStatusReleasesTrackedLease(t *testing.T) {
+	selector, err := NewProxyLeaseSelector([]ProxyRotationProviderConfig{{
+		Name: "provider-one",
+		Users: []ProxyRotationUserConfig{
+			{Name: "user-one", URL: "http://proxy-one:8080"},
+			{Name: "user-two", URL: "http://proxy-two:8080"},
+		},
+	}})
+	require.NoError(t, err)
+	lease, err := selector.AcquireRequired()
+	require.NoError(t, err)
+
+	resp := &colly.Response{
+		StatusCode: http.StatusNotFound,
+		Request: &colly.Request{
+			ProxyURL: lease.ProxyURL,
+			Ctx:      colly.NewContext(),
+		},
+	}
+	attachTrackedProxySelection(resp.Request, lease)
+
+	recordProxyFailure(selector, resp)
+
+	nextLease, err := selector.AcquireRequired()
+	require.NoError(t, err)
+	require.Equal(t, lease.ProxyURL, nextLease.ProxyURL)
+}
+
+func TestRecordProxyFailureBadGatewayStatusCode(t *testing.T) {
+	tracker := &trackingProxyHealth{}
+	resp := &colly.Response{
+		StatusCode: http.StatusBadGateway,
+		Request:    &colly.Request{ProxyURL: "http://proxy:8080"},
+	}
+	recordProxyFailure(tracker, resp)
+	require.Equal(t, []string{"http://proxy:8080"}, tracker.failures)
+}
+
+func TestRecordProxyFailureWithLeaseReporter(t *testing.T) {
+	selector, err := NewProxyLeaseSelector([]ProxyRotationProviderConfig{{
+		Name: "provider-one",
+		Users: []ProxyRotationUserConfig{
+			{Name: "user-one", URL: "http://proxy-one:8080"},
+			{Name: "user-two", URL: "http://proxy-two:8080"},
+		},
+	}})
+	require.NoError(t, err)
+	lease, err := selector.AcquireRequired()
+	require.NoError(t, err)
+
+	resp := &colly.Response{
+		StatusCode: 0,
+		Request: &colly.Request{
+			ProxyURL: lease.ProxyURL,
+			Ctx:      colly.NewContext(),
+		},
+	}
+	attachTrackedProxySelection(resp.Request, lease)
+
+	recordProxyFailure(selector, resp)
+	nextLease, err := selector.AcquireRequired()
+	require.NoError(t, err)
+	require.Equal(t, "http://proxy-two:8080", nextLease.ProxyURL)
 }
 
 // ─── NewService with proxies and circuit breaker ──────────────────────────
