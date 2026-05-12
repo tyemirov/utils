@@ -12,6 +12,28 @@
 - Add a crawler regression covering saturated proxy lease selection through the public HTTP proxy selector path.
 - Add a configfile regression for multi-document YAML streams.
 
+## [v0.15.3] - 2026-05-12
+
+### Features ✨
+- _No changes._
+
+### Improvements ⚙️
+- Release neutral terminal crawler proxy leases properly to avoid stale reservations on paths like binary responses, page-not-found titles, no-title exhaustion, and incomplete-content exhaustion.
+- Rotate proxy providers immediately after reported failures while releasing neutral terminal responses without affecting proxy health.
+- Reuse least-reserved healthy proxy leases under concurrency saturation.
+
+### Bug Fixes 🐛
+- Fix proxy lease finalization to release leases on neutral terminal responses, preventing stale reservations and improving lease management.
+
+### Testing 🧪
+- Add crawler response regression tests for neutral terminal proxy lease release scenarios.
+- Add regression coverage for saturated proxy lease selection through the public HTTP proxy selector path.
+- Add configfile regression for validation of multi-document YAML streams.
+
+### Docs 📚
+- Update architecture documentation to clarify proxy lease release on neutral terminal crawler responses.
+- Update README to reflect improvements in proxy lease selection and release behavior.
+
 ## [v0.15.2] - 2026-05-11
 
 ### Features ✨
