@@ -52,7 +52,9 @@ only the helpers they need.
   immediately while advancing the failed provider's next user for the next
   return. When all healthy leases are already reserved by in-flight requests, it
   reuses the least-reserved healthy lease instead of treating reservations as
-  candidate exhaustion.
+  candidate exhaustion. Neutral terminal crawler responses release their lease
+  without recording proxy success or failure, so reservations only reflect
+  active in-flight requests.
 - `ProxyLeaseAttemptScope` is caller-created for one scrape or request batch. It
   remembers which leases failed during that operation, skips those leases on
   later acquisitions, and returns `ErrProxyLeaseCandidatesExhausted` once every

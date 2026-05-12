@@ -75,6 +75,7 @@ func (processor *responseProcessor) handleResponse(resp *colly.Response) {
 
 	for _, handler := range processor.responseHandlers {
 		if handler.HandleBinaryResponse(resp, productID, fileExtension) {
+			processor.releaseProxyLease(resp)
 			return
 		}
 	}
@@ -86,6 +87,7 @@ func (processor *responseProcessor) handleResponse(resp *colly.Response) {
 	if pageTitleText == "" && domTitleText == "" {
 		processor.logger.Warning("No title found for %s product: %s", processor.platformID, productID)
 		if !processor.retryHandler.Retry(resp, RetryOptions{}) {
+			processor.releaseProxyLease(resp)
 			processor.SendFinalResult(resp, false, titleNotFoundMessage)
 		}
 		return
@@ -110,6 +112,7 @@ func (processor *responseProcessor) handleResponse(resp *colly.Response) {
 		resp.Ctx.Put(ctxProductErrorKey, pageNotFoundText)
 		resp.Ctx.Put(ctxProductNotFoundFlag, true)
 		processor.logger.Error("Product not found for ProductID: %s", productID)
+		processor.releaseProxyLease(resp)
 		processor.SendFinalResult(resp, false, pageNotFoundText)
 		return
 	}
@@ -136,6 +139,9 @@ func (processor *responseProcessor) handleResponse(resp *colly.Response) {
 					retryDecision.ResolvedLogMessage(),
 				)
 			} else {
+				if retryDecision.Policy != RetryPolicyRotateProxy {
+					processor.releaseProxyLease(resp)
+				}
 				processor.SendFinalResult(resp, false, retryDecision.Message)
 				return
 			}
@@ -149,6 +155,7 @@ func (processor *responseProcessor) handleResponse(resp *colly.Response) {
 		processor.persistHTMLSnapshot(productID, resp.Body)
 		if !processor.retryHandler.Retry(resp, RetryOptions{}) {
 			resp.Ctx.Put(ctxProductErrorKey, detailIncompleteMessage)
+			processor.releaseProxyLease(resp)
 			processor.SendFinalResult(resp, false, detailIncompleteMessage)
 		}
 		return
@@ -222,6 +229,19 @@ func (processor *responseProcessor) recordProxySuccess(resp *colly.Response) {
 		}
 	}
 	processor.proxyTracker.RecordSuccess(proxyURL)
+}
+
+func (processor *responseProcessor) releaseProxyLease(resp *colly.Response) {
+	if processor.proxyTracker == nil {
+		return
+	}
+	lease, found := selectedProxySelectionFromResponse(resp)
+	if !found {
+		return
+	}
+	if releaser, ok := processor.proxyTracker.(proxyLeaseReleaser); ok {
+		releaser.Release(lease)
+	}
 }
 
 func (processor *responseProcessor) retryByDecision(resp *colly.Response, decision RetryDecision) bool {
