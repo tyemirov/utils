@@ -709,6 +709,180 @@ func TestHandleResponseBinaryHandlerContinuesWhenReturningFalse(t *testing.T) {
 	require.Equal(t, 1, passThroughHandler.afterEvalCalls)
 }
 
+func TestHandleResponseReleasesNeutralProxyLeaseBeforeTerminalReturn(t *testing.T) {
+	testCases := []struct {
+		name             string
+		body             []byte
+		requestURL       string
+		responseHandlers []ResponseHandler
+		platformHooks    PlatformHooks
+		expectResult     bool
+		expectedError    string
+	}{
+		{
+			name:             "binary handler short circuit",
+			body:             []byte{0xFF, 0xD8, 0xFF, 0xE0},
+			requestURL:       "https://example.com/images/photo.jpg",
+			responseHandlers: []ResponseHandler{&recordingResponseHandler{binaryReturnValue: true}},
+			platformHooks:    noopPlatformHooks{},
+		},
+		{
+			name:          "page not found title",
+			body:          []byte(`<html><head><title>Page Not Found</title></head><body></body></html>`),
+			requestURL:    "https://example.com/dp/PROD404",
+			platformHooks: noopPlatformHooks{},
+			expectResult:  true,
+			expectedError: pageNotFoundText,
+		},
+		{
+			name:          "missing title retry exhausted",
+			body:          []byte(`<html><head></head><body></body></html>`),
+			requestURL:    "https://example.com/dp/NOTITLE",
+			platformHooks: noopPlatformHooks{},
+			expectResult:  true,
+			expectedError: titleNotFoundMessage,
+		},
+		{
+			name:          "incomplete content retry exhausted",
+			body:          []byte(`<html><head><title>Title</title></head><body></body></html>`),
+			requestURL:    "https://example.com/dp/INCOMPLETE",
+			platformHooks: incompleteContentHooks{},
+			expectResult:  true,
+			expectedError: detailIncompleteMessage,
+		},
+		{
+			name:       "default retry policy exhausted",
+			body:       []byte(`<html><head><title>Title</title></head><body><div id="wrong-context"></div></body></html>`),
+			requestURL: "https://example.com/dp/DEFAULT-RETRY",
+			platformHooks: retryingPlatformHooks{
+				retryMessage:       "retry default",
+				retryPolicy:        RetryPolicyDefault,
+				exhaustionBehavior: RetryExhaustionBehaviorFail,
+			},
+			expectResult:  true,
+			expectedError: "retry default",
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			results := make(chan *Result, 1)
+			selector, selectorErr := NewProxyLeaseSelector([]ProxyRotationProviderConfig{{
+				Name: "provider-one",
+				Users: []ProxyRotationUserConfig{
+					{Name: "user-one", URL: "http://proxy-one.example:8080"},
+					{Name: "user-two", URL: "http://proxy-two.example:8080"},
+				},
+			}})
+			require.NoError(t, selectorErr)
+			tracker := &recordingLeaseTracker{selector: selector}
+			lease, leaseErr := selector.AcquireRequired()
+			require.NoError(t, leaseErr)
+
+			processor := &responseProcessor{
+				platformID:       "TEST",
+				platformHooks:    testCase.platformHooks,
+				retryHandler:     newRetryHandler(ScraperConfig{RetryCount: 0}, noopLogger{}),
+				ruleEvaluator:    &countingRuleEvaluator{configured: 1},
+				proxyTracker:     tracker,
+				results:          results,
+				logger:           noopLogger{},
+				responseHandlers: testCase.responseHandlers,
+			}
+
+			response := newTestResponse("LEASE-PRODUCT")
+			response.Body = testCase.body
+			response.StatusCode = http.StatusOK
+			headers := http.Header{}
+			response.Headers = &headers
+			pageURL, parseErr := url.Parse(testCase.requestURL)
+			require.NoError(t, parseErr)
+			response.Request.URL = pageURL
+			response.Request.ProxyURL = lease.ProxyURL
+			attachTrackedProxySelection(response.Request, lease)
+
+			processor.handleResponse(response)
+
+			if testCase.expectResult {
+				result := <-results
+				require.False(t, result.Success)
+				require.Equal(t, testCase.expectedError, result.ErrorMessage)
+			} else {
+				select {
+				case result := <-results:
+					t.Fatalf("expected no result for neutral terminal path, got %+v", result)
+				default:
+				}
+			}
+
+			require.Equal(t, []ProxyLease{lease}, tracker.releases)
+			require.Empty(t, tracker.successes)
+			require.Empty(t, tracker.failures)
+			require.Empty(t, tracker.criticalFailures)
+
+			nextLease, nextLeaseErr := selector.AcquireRequired()
+			require.NoError(t, nextLeaseErr)
+			require.Equal(t, lease.ProxyURL, nextLease.ProxyURL)
+		})
+	}
+}
+
+type recordingLeaseTracker struct {
+	selector         *ProxyLeaseSelector
+	releases         []ProxyLease
+	successes        []ProxyLease
+	failures         []ProxyLease
+	criticalFailures []ProxyLease
+}
+
+func (tracker *recordingLeaseTracker) IsAvailable(proxyURL string) bool {
+	return tracker.selector.IsAvailable(proxyURL)
+}
+
+func (tracker *recordingLeaseTracker) RecordSuccess(proxyURL string) {
+	lease, found := tracker.selector.SelectionForProxyURL(proxyURL)
+	if !found {
+		return
+	}
+	tracker.ReportSuccess(lease)
+}
+
+func (tracker *recordingLeaseTracker) RecordFailure(proxyURL string) {
+	lease, found := tracker.selector.SelectionForProxyURL(proxyURL)
+	if !found {
+		return
+	}
+	tracker.ReportFailure(lease)
+}
+
+func (tracker *recordingLeaseTracker) RecordCriticalFailure(proxyURL string) {
+	lease, found := tracker.selector.SelectionForProxyURL(proxyURL)
+	if !found {
+		return
+	}
+	tracker.ReportCriticalFailure(lease)
+}
+
+func (tracker *recordingLeaseTracker) Release(lease ProxyLease) {
+	tracker.releases = append(tracker.releases, lease)
+	tracker.selector.Release(lease)
+}
+
+func (tracker *recordingLeaseTracker) ReportSuccess(lease ProxyLease) {
+	tracker.successes = append(tracker.successes, lease)
+	tracker.selector.ReportSuccess(lease)
+}
+
+func (tracker *recordingLeaseTracker) ReportFailure(lease ProxyLease) {
+	tracker.failures = append(tracker.failures, lease)
+	tracker.selector.ReportFailure(lease)
+}
+
+func (tracker *recordingLeaseTracker) ReportCriticalFailure(lease ProxyLease) {
+	tracker.criticalFailures = append(tracker.criticalFailures, lease)
+	tracker.selector.ReportCriticalFailure(lease)
+}
+
 func loadDocumentFromFile(t *testing.T, path string) *goquery.Document {
 	t.Helper()
 	file, err := os.Open(path)

@@ -20,6 +20,10 @@ Resolved: added `ProxyLease`, `ProxyLeaseSelector`, required/acquire/report/rele
 
 ## BugFixes (300–399)
 
+- [x] [UT-309] Release crawler proxy leases on neutral terminal responses. (Ensure response paths that finish without retrying or evaluating HTML, such as binary handlers, page-not-found titles, no-title exhaustion, and incomplete-content exhaustion, release the reserved proxy lease instead of leaving stale reservations behind.)
+
+Resolved: response processing now releases tracked proxy leases for neutral terminal response paths without reporting proxy success or failure. Added crawler regression coverage for binary short-circuit handlers, page-not-found titles, missing-title exhaustion, incomplete-content exhaustion, and default retry-policy exhaustion; updated crawler docs and changelog. Changed files: `crawler/response.go`, `crawler/response_test.go`, `README.md`, `ARCHITECTURE.md`, `CHANGELOG.md`, `issues.md/ISSUES.md`. Verified with `timeout -k 350s -s SIGKILL 350s make test`, `timeout -k 350s -s SIGKILL 350s make lint`, and `timeout -k 350s -s SIGKILL 350s make ci`.
+
 - [x] [UT-306] Build SOCKS dial targets with `net.JoinHostPort`. (Use bracket-aware host:port assembly in the SOCKS forwarder and add IPv6 dial-target regression coverage.)
 
 The forwarder assembled upstream dial targets with raw string formatting, which
