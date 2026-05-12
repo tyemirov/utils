@@ -51,6 +51,18 @@ Unlike Client.Chat, Factory.Chat assumes the caller passes a non-nil context and
 
 Chat marshals the request payload directly with json.Marshal even when ResponseFormat.Schema contains malformed JSON; json.RawMessage does not validate its contents, so json.Marshal succeeds and the client proceeds to POST an invalid body, returning a transport/HTTP error instead of failing fast with an encoding error (e.g., the schema used in TestClientChatFailsWhenMarshallingRequestPayload). This lets malformed response formats slip through and results in requests the API will reject.
 
+- [x] [UT-307] Allow lease reuse when all proxies are currently reserved. (Return the least-reserved healthy proxy instead of exhausting candidates when concurrent in-flight requests exceed the configured proxy count.)
+
+Returning an empty lease when every configured proxy is reserved makes `acquire()` emit `ErrProxyLeaseCandidatesExhausted`, which bubbles through `Select` into HTTP transport proxy callbacks and fails requests even though healthy proxies exist.
+
+Resolved: `ProxyLeaseSelector` now falls back to the least-reserved healthy lease after all unreserved candidates are occupied, while cooldown-unavailable candidates remain skipped. Added regression coverage for saturated public `Select` behavior and updated lease-selector expectations/docs/changelog. Changed files: `crawler/proxy_rotation_selector.go`, `crawler/proxy_lease_selector_test.go`, `README.md`, `ARCHITECTURE.md`, `CHANGELOG.md`, `issues.md/ISSUES.md`. Verified with `timeout -k 350s -s SIGKILL 350s make test`, `timeout -k 350s -s SIGKILL 350s make lint`, and `timeout -k 350s -s SIGKILL 350s make ci`.
+
+- [x] [UT-308] Reject trailing YAML documents after strict decode. (Require strict config loads to fail when a YAML stream contains more than one document instead of silently accepting only the first document.)
+
+The strict config loader performs one YAML decode and returns success without requiring the next decode to be `io.EOF`, so later YAML documents can be ignored while operators believe those settings were applied.
+
+Resolved: `configfile` now decodes exactly one YAML document before interpolation and requires EOF after the strict `KnownFields(true)` decode. Added `LoadYAMLBytes` and interpolation regressions for trailing documents, malformed trailing documents, and the final strict-decode EOF check; updated configfile docs/changelog. Changed files: `configfile/configfile.go`, `configfile/configfile_test.go`, `README.md`, `ARCHITECTURE.md`, `CHANGELOG.md`, `issues.md/ISSUES.md`. Verified with `timeout -k 350s -s SIGKILL 350s make test`, `timeout -k 350s -s SIGKILL 350s make lint`, and `timeout -k 350s -s SIGKILL 350s make ci`.
+
 ## Maintenance (407–449)
 
 - [x] [UT-410] Extract a shared browser transport runtime beneath jseval. (Add `browsertransport` with transport profiles, reusable sessions, SOCKS forwarding, HTTP client helpers, and one-shot rendering; make `jseval` a compatibility wrapper with migrated coverage.)

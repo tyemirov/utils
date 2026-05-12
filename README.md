@@ -21,7 +21,8 @@ projects.
 Reusable crawler primitives for proxy-aware scraping workloads.
 
 - **ProxyLeaseSelector** - Select provider/user-aware proxy leases, keep
-  successful leases sticky, and rotate providers immediately after a reported
+  successful leases sticky, reuse the least-reserved healthy lease under
+  concurrency saturation, and rotate providers immediately after a reported
   failure.
 - **ProxyLeaseAttemptScope** - Track failed leases for one scrape or request
   batch so callers can skip candidates that already failed during that
@@ -32,7 +33,8 @@ Strict YAML configuration loading for applications.
 
 - **LoadYAML(path string, target any) error** - Read a YAML config file, expand
   environment variables only inside YAML scalar values, reject missing
-  environment variables, and decode with known-field validation.
+  environment variables and trailing YAML documents, and decode with known-field
+  validation.
 - **LoadYAMLBytes(configPayload []byte, target any) error** - Apply the same
   contract to already-read YAML bytes.
 - **InterpolateYAML(configPayload []byte) ([]byte, error)** - Expand YAML scalar

@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"reflect"
 	"regexp"
@@ -119,15 +120,18 @@ func LoadYAMLBytes(configPayload []byte, target any) error {
 	if decodeError := decoder.Decode(target); decodeError != nil {
 		return fmt.Errorf("%w: %w", ErrParse, decodeError)
 	}
+	if streamError := requireYAMLDecoderEOF(decoder); streamError != nil {
+		return streamError
+	}
 
 	return nil
 }
 
 // InterpolateYAML expands environment variables only inside YAML scalar nodes.
 func InterpolateYAML(configPayload []byte) ([]byte, error) {
-	var rootNode yaml.Node
-	if unmarshalError := yaml.Unmarshal(configPayload, &rootNode); unmarshalError != nil {
-		return nil, fmt.Errorf("%w: %w", ErrParse, unmarshalError)
+	rootNode, decodeError := decodeSingleYAMLDocument(configPayload)
+	if decodeError != nil {
+		return nil, decodeError
 	}
 
 	missingVariableSet := make(map[string]struct{})
@@ -143,6 +147,33 @@ func InterpolateYAML(configPayload []byte) ([]byte, error) {
 		return nil, fmt.Errorf("%w: %w", ErrParse, marshalError)
 	}
 	return interpolatedPayload, nil
+}
+
+func decodeSingleYAMLDocument(configPayload []byte) (yaml.Node, error) {
+	decoder := yaml.NewDecoder(bytes.NewReader(configPayload))
+	var document yaml.Node
+	if decodeError := decoder.Decode(&document); decodeError != nil {
+		if errors.Is(decodeError, io.EOF) {
+			return yaml.Node{}, nil
+		}
+		return yaml.Node{}, fmt.Errorf("%w: %w", ErrParse, decodeError)
+	}
+	if streamError := requireYAMLDecoderEOF(decoder); streamError != nil {
+		return yaml.Node{}, streamError
+	}
+	return document, nil
+}
+
+func requireYAMLDecoderEOF(decoder *yaml.Decoder) error {
+	var trailingDocument yaml.Node
+	trailingDecodeError := decoder.Decode(&trailingDocument)
+	if errors.Is(trailingDecodeError, io.EOF) {
+		return nil
+	}
+	if trailingDecodeError != nil {
+		return fmt.Errorf("%w: %w", ErrParse, trailingDecodeError)
+	}
+	return fmt.Errorf("%w: trailing YAML document", ErrParse)
 }
 
 func validateDecodeTarget(target any) error {

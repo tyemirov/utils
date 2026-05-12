@@ -11,7 +11,7 @@ only the helpers they need.
   forwarding, and one-shot render helpers.
 - `configfile`: Strict YAML config loading with scalar-only environment
   interpolation, explicit missing-variable errors, no default-substitution
-  syntax, and known-field decoding.
+  syntax, single-document stream validation, and known-field decoding.
 - `crawler`: Shared crawling helpers, including provider/user-aware proxy lease
   selection and operation-scoped failed-lease tracking for scrape batches.
 - `file`: Filesystem helpers (delete, close, read/write convenience).
@@ -50,7 +50,9 @@ only the helpers they need.
 - `ProxyLeaseSelector` owns global provider/user rotation state. It keeps a
   successful lease sticky until failure, then advances to the next provider
   immediately while advancing the failed provider's next user for the next
-  return.
+  return. When all healthy leases are already reserved by in-flight requests, it
+  reuses the least-reserved healthy lease instead of treating reservations as
+  candidate exhaustion.
 - `ProxyLeaseAttemptScope` is caller-created for one scrape or request batch. It
   remembers which leases failed during that operation, skips those leases on
   later acquisitions, and returns `ErrProxyLeaseCandidatesExhausted` once every

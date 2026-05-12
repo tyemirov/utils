@@ -1,5 +1,15 @@
 # Changelog
 
+## [Unreleased]
+
+### Bug Fixes 🐛
+- Reuse the least-reserved healthy proxy lease when every configured lease is already reserved by in-flight requests.
+- Reject trailing YAML documents in `configfile` loads instead of silently ignoring documents after the first one.
+
+### Testing 🧪
+- Add a crawler regression covering saturated proxy lease selection through the public HTTP proxy selector path.
+- Add a configfile regression for multi-document YAML streams.
+
 ## [v0.15.1] - 2026-05-01
 
 ### Features ✨
