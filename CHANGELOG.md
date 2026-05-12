@@ -10,6 +10,30 @@
 - Add a crawler regression covering saturated proxy lease selection through the public HTTP proxy selector path.
 - Add a configfile regression for multi-document YAML streams.
 
+## [v0.15.2] - 2026-05-11
+
+### Features ✨
+- Add strict YAML configuration loading with scalar-only environment variable interpolation.
+- Introduce explicit errors for missing environment variables and trailing YAML documents.
+- Preserve and reuse proxy leases across redirects to improve proxy rotation.
+
+### Improvements ⚙️
+- Reuse the least-reserved healthy proxy lease when all leases are already reserved to handle concurrency saturation.
+- Unify crawler proxy lease rotation and release neutral crawler proxy leases.
+- Enhance proxy lease selection to keep leases sticky on success and rotate immediately on failure.
+
+### Bug Fixes 🐛
+- Fix proxy lease reuse logic to avoid treating all reserved leases as exhausted.
+- Reject trailing YAML documents in config loads instead of silently ignoring them.
+
+### Testing 🧪
+- Add extensive regression tests for proxy lease selection under saturated conditions.
+- Add tests covering multi-document YAML rejection and scalar interpolation in config files.
+
+### Docs 📚
+- Document new `configfile` package features including strict YAML loading and environment interpolation.
+- Update README with new `configfile` usage and proxy lease selector behavior improvements.
+
 ## [v0.15.1] - 2026-05-01
 
 ### Features ✨
