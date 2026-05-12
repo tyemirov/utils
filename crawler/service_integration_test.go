@@ -219,6 +219,38 @@ func TestNewCollectorSingleProxyAnnotatesRequestContext(t *testing.T) {
 	require.Equal(t, "http://user:pass@proxy-one.test:8080", req.Context().Value(colly.ProxyURLKey))
 }
 
+func TestProxyLeaseSelectorForScraperUsesInjectedSelector(t *testing.T) {
+	t.Parallel()
+
+	selector, err := NewProxyLeaseSelector([]ProxyRotationProviderConfig{{
+		Name: "provider-one",
+		Users: []ProxyRotationUserConfig{{
+			Name: "user-one",
+			URL:  "http://proxy.example:8080",
+		}},
+	}})
+	require.NoError(t, err)
+
+	resolvedSelector, err := proxyLeaseSelectorForScraper(ScraperConfig{
+		ProxyLeaseSelector: selector,
+		ProxyList:          []string{"://bad"},
+	}, noopLogger{})
+	require.NoError(t, err)
+	require.Same(t, selector, resolvedSelector)
+}
+
+func TestProxyLeaseSelectorForScraperHandlesEmptyAndBlankLists(t *testing.T) {
+	t.Parallel()
+
+	selector, err := proxyLeaseSelectorForScraper(ScraperConfig{}, noopLogger{})
+	require.NoError(t, err)
+	require.Nil(t, selector)
+
+	selector, err = proxyLeaseSelectorForScraper(ScraperConfig{ProxyList: []string{" "}}, noopLogger{})
+	require.ErrorIs(t, err, ErrProxyLeaseUnavailable)
+	require.Nil(t, selector)
+}
+
 func TestNewServiceBindsRuntimeToResponseHandlers(t *testing.T) {
 	t.Parallel()
 
@@ -298,6 +330,55 @@ func TestErrorHandlingCountsProxyConnectionFailures(t *testing.T) {
 	require.Equal(t, []string{"http://failing-proxy"}, tracker.failures)
 	require.Len(t, processor.results, 1)
 	require.Equal(t, 0, processor.results[0].statusCode)
+}
+
+func TestProxySelectionTrackingPreservesSelectedLeaseGeneration(t *testing.T) {
+	selector, err := NewProxyLeaseSelector([]ProxyRotationProviderConfig{
+		{
+			Name: "provider-one",
+			Users: []ProxyRotationUserConfig{
+				{Name: "user-one", URL: "http://provider-one.example:8080"},
+			},
+		},
+		{
+			Name: "provider-two",
+			Users: []ProxyRotationUserConfig{
+				{Name: "user-one", URL: "http://provider-two.example:8080"},
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	httpRequest, err := http.NewRequest(http.MethodGet, "https://example.com", nil)
+	require.NoError(t, err)
+	httpRequest = httpRequest.WithContext(context.WithValue(
+		httpRequest.Context(),
+		proxySelectionTrackerContextKey{},
+		&proxySelectionTracker{requestID: "request-one"},
+	))
+
+	_, err = trackSelectedProxyURL(httpRequest, selector.Select)
+	require.NoError(t, err)
+	initialLease, found := SelectedProxySelection(httpRequest)
+	require.True(t, found)
+
+	selector.ReportFailure(initialLease)
+	require.NotEqual(t, initialLease.Generation, selector.Acquire().Generation)
+
+	headers := http.Header{}
+	headers.Set(proxySelectionTrackingHeader, "request-one")
+	response := &colly.Response{
+		StatusCode: 0,
+		Request: &colly.Request{
+			Headers: &headers,
+			Ctx:     colly.NewContext(),
+		},
+	}
+
+	applyTrackedProxySelection(response)
+	trackedLease, found := selectedProxySelectionFromResponse(response)
+	require.True(t, found)
+	require.Equal(t, initialLease, trackedLease)
 }
 
 func TestHandleCollectorErrorHandlesNilResponse(t *testing.T) {

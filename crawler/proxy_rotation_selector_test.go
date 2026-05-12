@@ -269,6 +269,9 @@ func TestProxyRotationSelectorNilEmptyAndUnknownBranches(t *testing.T) {
 	require.NotPanics(t, func() { nilSelector.RecordFailure("http://unknown.example:8080") })
 	require.NotPanics(t, func() { nilSelector.RecordSuccess("http://unknown.example:8080") })
 	require.NotPanics(t, func() { nilSelector.RecordProxyFailure(ProxySelection{ProxyURL: "http://unknown.example:8080"}) })
+	require.NotPanics(t, func() {
+		nilSelector.RecordProxyCriticalFailure(ProxySelection{ProxyURL: "http://unknown.example:8080"})
+	})
 	require.NotPanics(t, func() { nilSelector.RecordProxySuccess(ProxySelection{ProxyURL: "http://unknown.example:8080"}) })
 	selection, found := nilSelector.SelectionForProxyURL("http://unknown.example:8080")
 	require.False(t, found)
@@ -299,6 +302,7 @@ func TestProxyRotationSelectorNilEmptyAndUnknownBranches(t *testing.T) {
 	selector.RecordFailure("http://unknown.example:8080")
 	selector.RecordSuccess("http://unknown.example:8080")
 	selector.RecordProxyFailure(ProxySelection{})
+	selector.RecordProxyCriticalFailure(ProxySelection{})
 	selector.RecordProxySuccess(ProxySelection{})
 	selector.RecordProxyFailure(ProxySelection{ProxyURL: "http://unknown.example:8080"})
 	selector.RecordProxySuccess(ProxySelection{ProxyURL: "http://unknown.example:8080"})

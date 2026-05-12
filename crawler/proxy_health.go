@@ -12,6 +12,16 @@ type proxyHealth interface {
 	RecordCriticalFailure(proxy string)
 }
 
+type proxyLeaseReporter interface {
+	ReportSuccess(lease ProxyLease)
+	ReportFailure(lease ProxyLease)
+	ReportCriticalFailure(lease ProxyLease)
+}
+
+type proxyLeaseReleaser interface {
+	Release(lease ProxyLease)
+}
+
 type proxyHealthTracker struct {
 	logger           Logger
 	mu               sync.Mutex
