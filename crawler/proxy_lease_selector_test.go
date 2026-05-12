@@ -44,6 +44,38 @@ func TestProxyLeaseSelectorAcquiresDistinctLeasesAndReusesReleasedSuccess(t *tes
 	require.Equal(t, firstLease.ProxyURL, reusedLease.ProxyURL)
 }
 
+func TestProxyLeaseSelectorReusesLeastReservedHealthyLeaseWhenAllReserved(t *testing.T) {
+	t.Parallel()
+
+	selector, err := NewProxyLeaseSelector([]ProxyRotationProviderConfig{{
+		Name: "provider-one",
+		Users: []ProxyRotationUserConfig{
+			{Name: "user-one", URL: "http://provider-one-user-one.example:8080"},
+			{Name: "user-two", URL: "http://provider-one-user-two.example:8080"},
+		},
+	}})
+	require.NoError(t, err)
+
+	firstLease, err := selector.AcquireRequired()
+	require.NoError(t, err)
+	secondLease, err := selector.AcquireRequired()
+	require.NoError(t, err)
+
+	request, err := http.NewRequest(http.MethodGet, "https://example.com/product", nil)
+	require.NoError(t, err)
+	selectedProxyURL, err := selector.Select(request)
+	require.NoError(t, err)
+	require.Equal(t, firstLease.ProxyURL, selectedProxyURL.String())
+
+	selectedLease, found := SelectedProxySelection(request)
+	require.True(t, found)
+	require.Equal(t, firstLease.ProxyURL, selectedLease.ProxyURL)
+
+	leastReservedLease, err := selector.AcquireRequired()
+	require.NoError(t, err)
+	require.Equal(t, secondLease.ProxyURL, leastReservedLease.ProxyURL)
+}
+
 func TestProxyLeaseSelectorAcquireForRequestReusesAttachedLease(t *testing.T) {
 	t.Parallel()
 
@@ -198,8 +230,9 @@ func TestProxyLeaseSelectorValidationDuplicateAndReleaseBranches(t *testing.T) {
 	require.Equal(t, "http://shared.example:8080", firstLease.ProxyURL)
 	require.Equal(t, "http://unique.example:8080", secondLease.ProxyURL)
 
-	_, err = selector.AcquireRequired()
-	require.ErrorIs(t, err, ErrProxyLeaseCandidatesExhausted)
+	saturatedLease, err := selector.AcquireRequired()
+	require.NoError(t, err)
+	require.Equal(t, firstLease.ProxyURL, saturatedLease.ProxyURL)
 
 	selector.Release(firstLease)
 	reusedLease := selector.Acquire()
@@ -518,7 +551,8 @@ func TestProxyLeaseSelectorNilInvalidAndInternalFallbackBranches(t *testing.T) {
 
 	selector.reservations = map[string]int{"http://proxy-one.example:8080": 1}
 	lease := selector.Acquire()
-	require.False(t, lease.Valid())
+	require.True(t, lease.Valid())
+	require.Equal(t, "http://proxy-one.example:8080", lease.ProxyURL)
 
 	emptySelector := &ProxyLeaseSelector{reservations: map[string]int{}}
 	require.False(t, emptySelector.Acquire().Valid())

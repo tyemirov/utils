@@ -151,6 +151,56 @@ func TestLoadYAMLBytesRejectsUnknownFields(testingHandle *testing.T) {
 	}
 }
 
+func TestLoadYAMLBytesRejectsTrailingDocuments(testingHandle *testing.T) {
+	var decoded configFileFixture
+	loadError := LoadYAMLBytes([]byte(strings.TrimSpace(`
+server:
+  enabled: true
+---
+server:
+  max_workers: 12
+`)), &decoded)
+
+	if !errors.Is(loadError, ErrParse) {
+		testingHandle.Fatalf("expected ErrParse, got %v", loadError)
+	}
+	if !strings.Contains(loadError.Error(), "trailing YAML document") {
+		testingHandle.Fatalf("expected trailing document error, got %v", loadError)
+	}
+}
+
+func TestLoadYAMLBytesRejectsTrailingDocumentAfterStrictDecode(testingHandle *testing.T) {
+	originalMarshalYAML := marshalYAML
+	marshalYAML = func(input any) ([]byte, error) {
+		return []byte("server: {}\n---\nserver: {}\n"), nil
+	}
+	testingHandle.Cleanup(func() {
+		marshalYAML = originalMarshalYAML
+	})
+
+	var decoded configFileFixture
+	loadError := LoadYAMLBytes([]byte("server: {}\n"), &decoded)
+	if !errors.Is(loadError, ErrParse) {
+		testingHandle.Fatalf("expected ErrParse, got %v", loadError)
+	}
+	if !strings.Contains(loadError.Error(), "trailing YAML document") {
+		testingHandle.Fatalf("expected trailing document error, got %v", loadError)
+	}
+}
+
+func TestInterpolateYAMLAcceptsEmptyPayload(testingHandle *testing.T) {
+	if _, interpolateError := InterpolateYAML(nil); interpolateError != nil {
+		testingHandle.Fatalf("expected empty YAML payload to interpolate, got %v", interpolateError)
+	}
+}
+
+func TestInterpolateYAMLRejectsMalformedTrailingDocument(testingHandle *testing.T) {
+	_, interpolateError := InterpolateYAML([]byte("server: {}\n---\nserver: [\n"))
+	if !errors.Is(interpolateError, ErrParse) {
+		testingHandle.Fatalf("expected ErrParse, got %v", interpolateError)
+	}
+}
+
 func TestInterpolateYAMLReportsMissingEnvironmentVariables(testingHandle *testing.T) {
 	testingHandle.Setenv(testScalarStringName, "available")
 	unsetEnvironment(testingHandle, testMissingEnvironmentNameA)

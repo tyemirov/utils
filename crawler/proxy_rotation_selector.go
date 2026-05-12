@@ -539,7 +539,7 @@ func (selector *ProxyLeaseSelector) acquireLocked() ProxyLease {
 		}
 	}
 
-	return ProxyLease{}
+	return selector.leastReservedAvailableLeaseLocked()
 }
 
 func (selector *ProxyLeaseSelector) firstUnreservedLeaseFromProviderLocked(providerIndex int) (ProxyLease, bool) {
@@ -568,6 +568,37 @@ func (selector *ProxyLeaseSelector) firstUnreservedLeaseFromProviderLocked(provi
 		return selector.leaseForProviderUser(provider, candidateUser), true
 	}
 	return ProxyLease{}, false
+}
+
+func (selector *ProxyLeaseSelector) leastReservedAvailableLeaseLocked() ProxyLease {
+	selectedReservationCount := 0
+	var selectedLease ProxyLease
+
+	for providerOffset := 0; providerOffset < len(selector.providers); providerOffset++ {
+		providerIndex := (selector.activeProvider + providerOffset) % len(selector.providers)
+		provider := selector.providers[providerIndex]
+		if len(provider.users) == 0 {
+			continue
+		}
+		userIndex := provider.nextUser
+		if userIndex < 0 || userIndex >= len(provider.users) {
+			userIndex = 0
+		}
+		for userOffset := 0; userOffset < len(provider.users); userOffset++ {
+			candidateUserIndex := (userIndex + userOffset) % len(provider.users)
+			candidateUser := provider.users[candidateUserIndex]
+			if !selector.isAvailableLocked(candidateUser.raw) {
+				continue
+			}
+			reservationCount := selector.reservations[candidateUser.raw]
+			if !selectedLease.Valid() || reservationCount < selectedReservationCount {
+				selectedLease = selector.leaseForProviderUser(provider, candidateUser)
+				selectedReservationCount = reservationCount
+			}
+		}
+	}
+
+	return selectedLease
 }
 
 func (selector *ProxyLeaseSelector) leaseForProviderUser(provider proxyRotationProvider, user proxyRotationUser) ProxyLease {
