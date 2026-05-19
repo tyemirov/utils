@@ -14,6 +14,32 @@
 - Add a crawler regression covering saturated proxy lease selection through the public HTTP proxy selector path.
 - Add a configfile regression for multi-document YAML streams.
 
+## [v0.15.4] - 2026-05-19
+
+### Features ✨
+- Add `RetryDecision.ProxyFailureSeverity` to distinguish normal rotate-proxy retries from critical proxy failure cooldowns.
+- Introduce `ReportProxyRetry` to rotate proxies without recording health failures.
+- Release crawler proxy leases on neutral terminal response paths to avoid stale reservations.
+
+### Improvements ⚙️
+- Clarify retry proxy severity documentation in architecture, README, and issues docs.
+- Rotate proxies immediately after normal retry decisions without marking them as failures.
+- Reuse least-reserved healthy proxy lease under concurrency saturation.
+- Reject trailing YAML documents in configfile loads instead of ignoring.
+
+### Bug Fixes 🐛
+- Fix rotate-proxy normal retries not respecting cooldown behavior correctly; only critical failures trigger cooldown now.
+- Prevent stale proxy reservations by releasing leases on neutral responses like binary responses or no-title exhaustion.
+
+### Testing 🧪
+- Add coverage tests for rotate-proxy retry cooldown and normal retry reports.
+- Add crawler regression tests for proxy lease release on neutral terminal responses.
+- Add coverage for saturated proxy lease selection and multi-document YAML stream loads.
+
+### Docs 📚
+- Update architecture, changelog, README, and issues documentation with new proxy retry severity handling and lease selector behavior.
+- Clarify platform hooks for retry severity and their proxy health impact.
+
 ## [v0.15.3] - 2026-05-12
 
 ### Features ✨
