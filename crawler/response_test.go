@@ -168,10 +168,11 @@ func (e *countingRuleEvaluator) ConfiguredVerifierCount() int {
 }
 
 type retryingPlatformHooks struct {
-	retryMessage       string
-	logMessage         string
-	retryPolicy        RetryPolicy
-	exhaustionBehavior RetryExhaustionBehavior
+	retryMessage         string
+	logMessage           string
+	retryPolicy          RetryPolicy
+	exhaustionBehavior   RetryExhaustionBehavior
+	proxyFailureSeverity RetryProxyFailureSeverity
 }
 
 func (hooks retryingPlatformHooks) NormalizeTitle(title string) string {
@@ -204,11 +205,12 @@ func (hooks domTitlePlatformHooks) ExtractDOMTitle(document *goquery.Document) s
 func (hooks retryingPlatformHooks) ShouldRetry(_ string, document *goquery.Document) RetryDecision {
 	if document.Find("#wrong-context").Length() > 0 {
 		return RetryDecision{
-			ShouldRetry:        true,
-			Message:            hooks.retryMessage,
-			LogMessage:         hooks.logMessage,
-			Policy:             hooks.retryPolicy,
-			ExhaustionBehavior: hooks.exhaustionBehavior,
+			ShouldRetry:          true,
+			Message:              hooks.retryMessage,
+			LogMessage:           hooks.logMessage,
+			Policy:               hooks.retryPolicy,
+			ExhaustionBehavior:   hooks.exhaustionBehavior,
+			ProxyFailureSeverity: hooks.proxyFailureSeverity,
 		}
 	}
 	return RetryDecision{}
@@ -253,7 +255,8 @@ func TestHandleResponseContinuesEvaluationAfterWrongDeliveryContextRetriesExhaus
 	require.Equal(t, 2, result.ConfiguredVerifierCount)
 	require.Equal(t, 1, ruleEvaluator.calls)
 	require.Empty(t, tracker.successes)
-	require.Equal(t, []string{"http://proxy-one.test:8080"}, tracker.criticalFailures)
+	require.Equal(t, []string{"http://proxy-one.test:8080"}, tracker.failures)
+	require.Empty(t, tracker.criticalFailures)
 }
 
 func TestHandleResponseWrongDeliveryContextRotatesProxyWithoutBackoff(t *testing.T) {
@@ -295,7 +298,8 @@ func TestHandleResponseWrongDeliveryContextRotatesProxyWithoutBackoff(t *testing
 	processor.handleResponse(response)
 
 	require.Empty(t, tracker.successes)
-	require.Equal(t, []string{"http://user:pass@proxy-one.test:8080"}, tracker.criticalFailures)
+	require.Equal(t, []string{"http://user:pass@proxy-one.test:8080"}, tracker.failures)
+	require.Empty(t, tracker.criticalFailures)
 	require.Len(t, retryHandler.calls, 1)
 	require.Len(t, retryHandler.options, 1)
 	require.True(t, retryHandler.options[0].SkipDelay)
@@ -356,6 +360,47 @@ func TestHandleResponseWrongDeliveryContextFallsBackToDefaultRetryWithoutAlterna
 		t.Fatalf("expected retry without final result, got %+v", result)
 	default:
 	}
+}
+
+func TestHandleResponseRotateProxyRetryCanRequestCriticalCooldown(t *testing.T) {
+	results := make(chan *Result, 1)
+	retryHandler := &stubRetryHandler{result: true}
+	tracker := &trackingProxyHealth{}
+	processor := &responseProcessor{
+		scraperConfig: ScraperConfig{
+			ProxyList: []string{
+				"http://proxy-one.test:8080",
+				"http://proxy-two.test:8080",
+			},
+		},
+		platformHooks: retryingPlatformHooks{
+			retryMessage:         "proxy rendered block page",
+			retryPolicy:          RetryPolicyRotateProxy,
+			proxyFailureSeverity: RetryProxyFailureSeverityCritical,
+		},
+		retryHandler:  retryHandler,
+		ruleEvaluator: &countingRuleEvaluator{},
+		proxyTracker:  tracker,
+		results:       results,
+		logger:        noopLogger{},
+	}
+
+	response := newTestResponse("B00TEST123")
+	response.Body = []byte(`<html><head><title>Example Product</title></head><body><div id="wrong-context"></div></body></html>`)
+	response.StatusCode = http.StatusOK
+	headers := http.Header{}
+	response.Headers = &headers
+	response.Request.ProxyURL = "http://proxy-one.test:8080"
+	pageURL, err := url.Parse("https://www.amazon.com/dp/B00TEST123")
+	require.NoError(t, err)
+	response.Request.URL = pageURL
+
+	processor.handleResponse(response)
+
+	require.Empty(t, tracker.failures)
+	require.Equal(t, []string{"http://proxy-one.test:8080"}, tracker.criticalFailures)
+	require.Len(t, retryHandler.calls, 1)
+	require.True(t, retryHandler.options[0].SkipDelay)
 }
 
 func TestNoopPlatformHooksIsContentCompleteDefaultsToTrue(t *testing.T) {

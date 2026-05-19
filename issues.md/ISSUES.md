@@ -20,6 +20,10 @@ Resolved: added `ProxyLease`, `ProxyLeaseSelector`, required/acquire/report/rele
 
 ## BugFixes (300–399)
 
+- [x] [UT-310] Keep normal rotate-proxy retries from cooling down the full proxy pool. (Record normal proxy failures for content-level rotate decisions such as CAPTCHA or wrong delivery context, while preserving an explicit critical cooldown option for genuinely unhealthy proxy candidates.)
+
+Resolved: `RetryPolicyRotateProxy` decisions now record normal proxy failures by default, keeping per-product rotation immediate without forcing every candidate into global cooldown. Added `RetryDecision.ProxyFailureSeverity` for callers that need explicit critical cooldown, covered the normal tracker path, lease-reporter path, and critical opt-in path, and documented the retry semantics. Changed files: `crawler/platform.go`, `crawler/response.go`, `crawler/response_test.go`, `crawler/coverage_test.go`, `README.md`, `ARCHITECTURE.md`, `CHANGELOG.md`, `issues.md/ISSUES.md`. Verified with pre-change and post-change `timeout -k 350s -s SIGKILL 350s make ci`; focused `timeout -k 180s -s SIGKILL 180s go test -failfast ./crawler -count=1` also passed.
+
 - [x] [UT-309] Release crawler proxy leases on neutral terminal responses. (Ensure response paths that finish without retrying or evaluating HTML, such as binary handlers, page-not-found titles, no-title exhaustion, and incomplete-content exhaustion, release the reserved proxy lease instead of leaving stale reservations behind.)
 
 Resolved: response processing now releases tracked proxy leases for neutral terminal response paths without reporting proxy success or failure. Added crawler regression coverage for binary short-circuit handlers, page-not-found titles, missing-title exhaustion, incomplete-content exhaustion, and default retry-policy exhaustion; updated crawler docs and changelog. Changed files: `crawler/response.go`, `crawler/response_test.go`, `README.md`, `ARCHITECTURE.md`, `CHANGELOG.md`, `issues.md/ISSUES.md`. Verified with `timeout -k 350s -s SIGKILL 350s make test`, `timeout -k 350s -s SIGKILL 350s make lint`, and `timeout -k 350s -s SIGKILL 350s make ci`.

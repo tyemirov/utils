@@ -251,7 +251,7 @@ func (processor *responseProcessor) retryByDecision(resp *colly.Response, decisi
 
 	options := RetryOptions{}
 	if decision.Policy == RetryPolicyRotateProxy {
-		processor.recordCriticalProxyFailure(resp)
+		processor.recordProxyRetryFailure(resp, decision)
 		options.SkipDelay = true
 		if alternativeProxyRetryCount := processor.alternativeProxyRetryCount(); alternativeProxyRetryCount > 0 {
 			options.LimitRetries = true
@@ -268,6 +268,28 @@ func (processor *responseProcessor) alternativeProxyRetryCount() int {
 		return 0
 	}
 	return proxyCandidateCount - 1
+}
+
+func (processor *responseProcessor) recordProxyRetryFailure(resp *colly.Response, decision RetryDecision) {
+	if decision.ProxyFailureSeverity == RetryProxyFailureSeverityCritical {
+		processor.recordCriticalProxyFailure(resp)
+		return
+	}
+	processor.recordNormalProxyFailure(resp)
+}
+
+func (processor *responseProcessor) recordNormalProxyFailure(resp *colly.Response) {
+	proxyURL := responseProxyURL(resp)
+	if processor.proxyTracker == nil || proxyURL == "" {
+		return
+	}
+	if lease, found := selectedProxySelectionFromResponse(resp); found {
+		if reporter, ok := processor.proxyTracker.(proxyLeaseReporter); ok {
+			reporter.ReportFailure(lease)
+			return
+		}
+	}
+	processor.proxyTracker.RecordFailure(proxyURL)
 }
 
 func (processor *responseProcessor) recordCriticalProxyFailure(resp *colly.Response) {
