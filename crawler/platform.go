@@ -22,13 +22,28 @@ const (
 	RetryExhaustionBehaviorContinue
 )
 
+// RetryProxyFailureSeverity controls how rotate-proxy retries affect proxy health.
+type RetryProxyFailureSeverity uint8
+
+const (
+	// RetryProxyFailureSeverityNormal rotates away from the current proxy without
+	// forcing a global cooldown. This is the default for retry decisions that
+	// should avoid the current lease without proving the proxy is unhealthy.
+	RetryProxyFailureSeverityNormal RetryProxyFailureSeverity = iota
+	// RetryProxyFailureSeverityCritical rotates and immediately cools down the
+	// proxy. Use this only when the response proves the proxy candidate itself is
+	// unhealthy for future requests.
+	RetryProxyFailureSeverityCritical
+)
+
 // RetryDecision captures the outcome of a platform retry check.
 type RetryDecision struct {
-	ShouldRetry        bool
-	Message            string
-	LogMessage         string
-	Policy             RetryPolicy
-	ExhaustionBehavior RetryExhaustionBehavior
+	ShouldRetry          bool
+	Message              string
+	LogMessage           string
+	Policy               RetryPolicy
+	ExhaustionBehavior   RetryExhaustionBehavior
+	ProxyFailureSeverity RetryProxyFailureSeverity
 }
 
 // ResolvedLogMessage returns the log message or falls back to the general message.

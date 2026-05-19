@@ -737,6 +737,139 @@ func TestRecordProxySuccessEmptyProxyURL(t *testing.T) {
 	require.Empty(t, tracker.successes)
 }
 
+func TestRecordNormalProxyFailureWithTracker(t *testing.T) {
+	tracker := &trackingProxyHealth{}
+	processor := &responseProcessor{proxyTracker: tracker}
+	resp := newTestResponse("PROD")
+	resp.Request.ProxyURL = "http://proxy:8080"
+	processor.recordNormalProxyFailure(resp)
+	require.Equal(t, []string{"http://proxy:8080"}, tracker.failures)
+}
+
+func TestRecordNormalProxyFailureWithLeaseReporter(t *testing.T) {
+	proxyURLs := []string{"http://proxy-one:8080", "http://proxy-two:8080"}
+	selector, err := NewProxyLeaseSelectorWithOptions(
+		[]ProxyRotationProviderConfig{
+			{
+				Name: "provider-one",
+				Users: []ProxyRotationUserConfig{{
+					Name: "user-one",
+					URL:  proxyURLs[0],
+				}},
+			},
+			{
+				Name: "provider-two",
+				Users: []ProxyRotationUserConfig{{
+					Name: "user-one",
+					URL:  proxyURLs[1],
+				}},
+			},
+		},
+		ProxyLeaseSelectorCircuitBreaker(true),
+		ProxyLeaseSelectorClock(func() time.Time { return time.Unix(0, 0) }),
+	)
+	require.NoError(t, err)
+	lease, err := selector.AcquireRequired()
+	require.NoError(t, err)
+
+	processor := &responseProcessor{proxyTracker: selector}
+	resp := newTestResponse("PROD")
+	resp.Request.ProxyURL = lease.ProxyURL
+	attachTrackedProxySelection(resp.Request, lease)
+
+	processor.recordNormalProxyFailure(resp)
+	require.True(t, selector.IsAvailable(lease.ProxyURL))
+	nextLease, err := selector.AcquireRequired()
+	require.NoError(t, err)
+	require.Equal(t, proxyURLs[1], nextLease.ProxyURL)
+	selector.Release(nextLease)
+
+	for range defaultProxyFailureThreshold * len(proxyURLs) {
+		retryLease, retryErr := selector.AcquireRequired()
+		require.NoError(t, retryErr)
+		retryResponse := newTestResponse("PROD")
+		retryResponse.Request.ProxyURL = retryLease.ProxyURL
+		attachTrackedProxySelection(retryResponse.Request, retryLease)
+
+		processor.recordNormalProxyFailure(retryResponse)
+		require.True(t, selector.IsAvailable(retryLease.ProxyURL))
+	}
+
+	for _, proxyURL := range proxyURLs {
+		require.True(t, selector.IsAvailable(proxyURL))
+	}
+}
+
+func TestRecordNormalProxyFailureLookupBranches(t *testing.T) {
+	selector, err := NewProxyLeaseSelector([]ProxyRotationProviderConfig{
+		{
+			Name: "provider-one",
+			Users: []ProxyRotationUserConfig{{
+				Name: "user-one",
+				URL:  "http://proxy-one:8080",
+			}},
+		},
+		{
+			Name: "provider-two",
+			Users: []ProxyRotationUserConfig{{
+				Name: "user-one",
+				URL:  "http://proxy-two:8080",
+			}},
+		},
+	})
+	require.NoError(t, err)
+	lease, err := selector.AcquireRequired()
+	require.NoError(t, err)
+
+	processor := &responseProcessor{proxyTracker: selector}
+	resp := newTestResponse("PROD")
+	resp.Request.ProxyURL = lease.ProxyURL
+	processor.recordNormalProxyFailure(resp)
+
+	nextLease, err := selector.AcquireRequired()
+	require.NoError(t, err)
+	require.Equal(t, "http://proxy-two:8080", nextLease.ProxyURL)
+	selector.Release(nextLease)
+
+	resp = newTestResponse("PROD")
+	resp.Request.ProxyURL = "http://unknown-proxy:8080"
+	require.NotPanics(t, func() { processor.recordNormalProxyFailure(resp) })
+}
+
+type retryOnlyProxyHealth struct {
+	trackingProxyHealth
+	retryLeases []ProxyLease
+}
+
+func (tracker *retryOnlyProxyHealth) ReportProxyRetry(lease ProxyLease) {
+	tracker.retryLeases = append(tracker.retryLeases, lease)
+}
+
+func TestRecordNormalProxyFailureWithoutLookupFallsBackToHealthFailure(t *testing.T) {
+	tracker := &retryOnlyProxyHealth{}
+	processor := &responseProcessor{proxyTracker: tracker}
+	resp := newTestResponse("PROD")
+	resp.Request.ProxyURL = "http://proxy:8080"
+
+	processor.recordNormalProxyFailure(resp)
+
+	require.Empty(t, tracker.retryLeases)
+	require.Equal(t, []string{"http://proxy:8080"}, tracker.failures)
+}
+
+func TestRecordNormalProxyFailureBoundaryBranches(t *testing.T) {
+	processor := &responseProcessor{}
+	resp := newTestResponse("PROD")
+	resp.Request.ProxyURL = "http://proxy:8080"
+	require.NotPanics(t, func() { processor.recordNormalProxyFailure(resp) })
+
+	tracker := &trackingProxyHealth{}
+	processor = &responseProcessor{proxyTracker: tracker}
+	resp.Request.ProxyURL = ""
+	processor.recordNormalProxyFailure(resp)
+	require.Empty(t, tracker.failures)
+}
+
 func TestRecordCriticalProxyFailureWithLeaseReporter(t *testing.T) {
 	selector, err := NewProxyLeaseSelectorWithOptions(
 		[]ProxyRotationProviderConfig{{
