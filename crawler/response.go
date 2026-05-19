@@ -283,13 +283,31 @@ func (processor *responseProcessor) recordNormalProxyFailure(resp *colly.Respons
 	if processor.proxyTracker == nil || proxyURL == "" {
 		return
 	}
-	if lease, found := selectedProxySelectionFromResponse(resp); found {
-		if reporter, ok := processor.proxyTracker.(proxyLeaseReporter); ok {
-			reporter.ReportFailure(lease)
-			return
-		}
+	if processor.reportProxyRetry(resp, proxyURL) {
+		return
 	}
 	processor.proxyTracker.RecordFailure(proxyURL)
+}
+
+func (processor *responseProcessor) reportProxyRetry(resp *colly.Response, proxyURL string) bool {
+	retryReporter, ok := processor.proxyTracker.(proxyLeaseRetryReporter)
+	if !ok {
+		return false
+	}
+	if lease, found := selectedProxySelectionFromResponse(resp); found {
+		retryReporter.ReportProxyRetry(lease)
+		return true
+	}
+	lookup, ok := processor.proxyTracker.(proxyLeaseSelectionLookup)
+	if !ok {
+		return false
+	}
+	lease, found := lookup.SelectionForProxyURL(proxyURL)
+	if !found {
+		return false
+	}
+	retryReporter.ReportProxyRetry(lease)
+	return true
 }
 
 func (processor *responseProcessor) recordCriticalProxyFailure(resp *colly.Response) {

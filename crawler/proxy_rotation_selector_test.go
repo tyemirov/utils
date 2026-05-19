@@ -269,6 +269,7 @@ func TestProxyRotationSelectorNilEmptyAndUnknownBranches(t *testing.T) {
 	require.NotPanics(t, func() { nilSelector.RecordFailure("http://unknown.example:8080") })
 	require.NotPanics(t, func() { nilSelector.RecordSuccess("http://unknown.example:8080") })
 	require.NotPanics(t, func() { nilSelector.RecordProxyFailure(ProxySelection{ProxyURL: "http://unknown.example:8080"}) })
+	require.NotPanics(t, func() { nilSelector.RecordProxyRetry(ProxySelection{ProxyURL: "http://unknown.example:8080"}) })
 	require.NotPanics(t, func() {
 		nilSelector.RecordProxyCriticalFailure(ProxySelection{ProxyURL: "http://unknown.example:8080"})
 	})
@@ -302,17 +303,32 @@ func TestProxyRotationSelectorNilEmptyAndUnknownBranches(t *testing.T) {
 	selector.RecordFailure("http://unknown.example:8080")
 	selector.RecordSuccess("http://unknown.example:8080")
 	selector.RecordProxyFailure(ProxySelection{})
+	selector.RecordProxyRetry(ProxySelection{})
 	selector.RecordProxyCriticalFailure(ProxySelection{})
 	selector.RecordProxySuccess(ProxySelection{})
 	selector.RecordProxyFailure(ProxySelection{ProxyURL: "http://unknown.example:8080"})
+	selector.RecordProxyRetry(ProxySelection{ProxyURL: "http://unknown.example:8080"})
 	selector.RecordProxySuccess(ProxySelection{ProxyURL: "http://unknown.example:8080"})
 	selector.RecordProxyFailure(ProxySelection{ProxyURL: "http://provider-a.example:8080", Generation: 99})
+	selector.RecordProxyRetry(ProxySelection{ProxyURL: "http://provider-a.example:8080", Generation: 99})
 	selector.RecordProxySuccess(ProxySelection{ProxyURL: "http://provider-a.example:8080", Generation: 99})
 
 	providerBSelection, found := selector.SelectionForProxyURL("http://provider-b.example:8080")
 	require.True(t, found)
 	selector.RecordProxyFailure(providerBSelection)
 	selector.RecordProxySuccess(providerBSelection)
+
+	retrySelector, err := NewProxyRotationSelector([]ProxyRotationProviderConfig{
+		{Name: "provider-a", Users: []ProxyRotationUserConfig{{Name: "user-1", URL: "http://retry-a.example:8080"}}},
+		{Name: "provider-b", Users: []ProxyRotationUserConfig{{Name: "user-1", URL: "http://retry-b.example:8080"}}},
+	})
+	require.NoError(t, err)
+	retrySelection, found := retrySelector.SelectionForProxyURL("http://retry-a.example:8080")
+	require.True(t, found)
+	retrySelector.RecordProxyRetry(retrySelection)
+	retryProxyURL, err := retrySelector.Select(newProxyRotationRequest(t, "https://example.com/retry"))
+	require.NoError(t, err)
+	require.Equal(t, "http://retry-b.example:8080", retryProxyURL.String())
 
 	selection, found = selector.SelectionForProxyURL(" ")
 	require.False(t, found)

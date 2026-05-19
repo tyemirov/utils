@@ -59,9 +59,9 @@ only the helpers they need.
   remembers which leases failed during that operation, skips those leases on
   later acquisitions, and returns `ErrProxyLeaseCandidatesExhausted` once every
   configured candidate has failed.
-- `RetryPolicyRotateProxy` records a normal proxy failure by default so
+- `RetryPolicyRotateProxy` uses a rotation-only proxy report by default so
   content-level retry decisions rotate away from the current lease without
-  globally cooling the candidate. Platform hooks opt into critical cooldown with
+  recording proxy health failure. Platform hooks opt into critical cooldown with
   `RetryDecision.ProxyFailureSeverity` only when the proxy itself is unhealthy.
 
 ## LLM Module (`llm`)

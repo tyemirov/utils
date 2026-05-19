@@ -23,10 +23,11 @@ Reusable crawler primitives for proxy-aware scraping workloads.
 - **ProxyLeaseSelector** - Select provider/user-aware proxy leases, keep
   successful leases sticky, reuse the least-reserved healthy lease under
   concurrency saturation, release neutral terminal responses without poisoning
-  proxy health, and rotate providers immediately after a reported failure.
+  proxy health, and rotate providers immediately after reported failures or
+  rotation-only retry decisions.
 - **RetryDecision.ProxyFailureSeverity** - Let platform hooks distinguish normal
-  rotate-proxy retries from critical proxy failures that should immediately
-  cooldown a candidate.
+  rotate-proxy retries that only rotate leases from critical proxy failures that
+  should immediately cooldown a candidate.
 - **ProxyLeaseAttemptScope** - Track failed leases for one scrape or request
   batch so callers can skip candidates that already failed during that
   operation and stop with a typed exhausted-candidates error.

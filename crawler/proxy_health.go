@@ -18,8 +18,16 @@ type proxyLeaseReporter interface {
 	ReportCriticalFailure(lease ProxyLease)
 }
 
+type proxyLeaseRetryReporter interface {
+	ReportProxyRetry(lease ProxyLease)
+}
+
 type proxyLeaseReleaser interface {
 	Release(lease ProxyLease)
+}
+
+type proxyLeaseSelectionLookup interface {
+	SelectionForProxyURL(proxyURL string) (ProxySelection, bool)
 }
 
 type proxyHealthTracker struct {

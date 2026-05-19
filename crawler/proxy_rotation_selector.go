@@ -74,6 +74,14 @@ type proxyLeaseSelectorOptions struct {
 	now                   func() time.Time
 }
 
+type proxyLeaseRotationHealthEffect uint8
+
+const (
+	proxyLeaseRotationHealthUnchanged proxyLeaseRotationHealthEffect = iota
+	proxyLeaseRotationHealthFailure
+	proxyLeaseRotationHealthCriticalFailure
+)
+
 // ProxyLeaseSelectorOption configures proxy lease selector runtime behavior.
 type ProxyLeaseSelectorOption func(*proxyLeaseSelectorOptions)
 
@@ -283,17 +291,22 @@ func (selector *ProxyLeaseSelector) Release(lease ProxyLease) {
 	selector.releaseLocked(lease)
 }
 
+// ReportProxyRetry releases a lease and rotates without recording proxy health failure.
+func (selector *ProxyLeaseSelector) ReportProxyRetry(lease ProxyLease) {
+	selector.reportRotation(lease, proxyLeaseRotationHealthUnchanged)
+}
+
 // ReportFailure releases a lease and rotates immediately to the next provider.
 func (selector *ProxyLeaseSelector) ReportFailure(lease ProxyLease) {
-	selector.reportFailure(lease, false)
+	selector.reportRotation(lease, proxyLeaseRotationHealthFailure)
 }
 
 // ReportCriticalFailure releases a lease and immediately cools the proxy.
 func (selector *ProxyLeaseSelector) ReportCriticalFailure(lease ProxyLease) {
-	selector.reportFailure(lease, true)
+	selector.reportRotation(lease, proxyLeaseRotationHealthCriticalFailure)
 }
 
-func (selector *ProxyLeaseSelector) reportFailure(lease ProxyLease, critical bool) {
+func (selector *ProxyLeaseSelector) reportRotation(lease ProxyLease, healthEffect proxyLeaseRotationHealthEffect) {
 	if selector == nil || !lease.Valid() {
 		return
 	}
@@ -306,9 +319,10 @@ func (selector *ProxyLeaseSelector) reportFailure(lease ProxyLease, critical boo
 	if !found {
 		return
 	}
-	if critical {
+	switch healthEffect {
+	case proxyLeaseRotationHealthCriticalFailure:
 		selector.recordCriticalFailureLocked(lease.ProxyURL)
-	} else {
+	case proxyLeaseRotationHealthFailure:
 		selector.recordFailureLocked(lease.ProxyURL)
 	}
 	if lease.Generation != selector.generation {
@@ -719,6 +733,14 @@ func (selector *ProxyRotationSelector) RecordProxyFailure(selection ProxySelecti
 		return
 	}
 	selector.leaseSelector.ReportFailure(selection)
+}
+
+// RecordProxyRetry rotates to the next provider without recording proxy health failure.
+func (selector *ProxyRotationSelector) RecordProxyRetry(selection ProxySelection) {
+	if selector == nil || selector.leaseSelector == nil {
+		return
+	}
+	selector.leaseSelector.ReportProxyRetry(selection)
 }
 
 // RecordProxyCriticalFailure cools the selected proxy immediately.
