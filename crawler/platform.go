@@ -27,8 +27,8 @@ type RetryProxyFailureSeverity uint8
 
 const (
 	// RetryProxyFailureSeverityNormal rotates away from the current proxy without
-	// forcing a global cooldown. This is the default for content-level retry
-	// decisions such as captchas or wrong delivery context.
+	// forcing a global cooldown. This is the default for retry decisions that
+	// should avoid the current lease without proving the proxy is unhealthy.
 	RetryProxyFailureSeverityNormal RetryProxyFailureSeverity = iota
 	// RetryProxyFailureSeverityCritical rotates and immediately cools down the
 	// proxy. Use this only when the response proves the proxy candidate itself is
