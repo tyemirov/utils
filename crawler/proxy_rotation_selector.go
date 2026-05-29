@@ -353,10 +353,13 @@ func (selector *ProxyLeaseSelector) ReportSuccess(lease ProxyLease) {
 
 	selector.releaseLocked(lease)
 	selectionIndex, found := selector.selectionByProxy[strings.TrimSpace(lease.ProxyURL)]
-	if !found || lease.Generation != selector.generation {
+	if !found {
 		return
 	}
 	selector.recordSuccessLocked(lease.ProxyURL)
+	if lease.Generation != selector.generation {
+		return
+	}
 
 	provider := &selector.providers[selectionIndex.provider]
 	activeUserIndex := provider.nextUser % len(provider.users)

@@ -162,6 +162,67 @@ func TestProxyLeaseSelectorIgnoresStaleReportsAfterGenerationChange(t *testing.T
 	require.Equal(t, "http://provider-two.example:8080", nextLease.ProxyURL)
 }
 
+func TestProxyLeaseSelectorStaleSuccessClearsHealthWithoutMovingCursor(t *testing.T) {
+	t.Parallel()
+
+	const providerOneProxyURL = "http://provider-one.example:8080"
+	const providerTwoProxyURL = "http://provider-two.example:8080"
+
+	currentTime := time.Unix(0, 0)
+	selector, err := NewProxyLeaseSelectorWithOptions(
+		[]ProxyRotationProviderConfig{
+			{
+				Name: "provider-one",
+				Users: []ProxyRotationUserConfig{
+					{Name: "user-one", URL: providerOneProxyURL},
+				},
+			},
+			{
+				Name: "provider-two",
+				Users: []ProxyRotationUserConfig{
+					{Name: "user-one", URL: providerTwoProxyURL},
+				},
+			},
+		},
+		ProxyLeaseSelectorCircuitBreaker(true),
+		ProxyLeaseSelectorClock(func() time.Time { return currentTime }),
+	)
+	require.NoError(t, err)
+
+	failedLease, err := selector.AcquireRequired()
+	require.NoError(t, err)
+	require.Equal(t, providerOneProxyURL, failedLease.ProxyURL)
+
+	providerTwoLease, err := selector.AcquireRequired()
+	require.NoError(t, err)
+	require.Equal(t, providerTwoProxyURL, providerTwoLease.ProxyURL)
+
+	staleSuccessfulLease, err := selector.AcquireRequired()
+	require.NoError(t, err)
+	require.Equal(t, providerOneProxyURL, staleSuccessfulLease.ProxyURL)
+	require.Equal(t, failedLease.Generation, staleSuccessfulLease.Generation)
+
+	selector.ReportCriticalFailure(failedLease)
+	require.False(t, selector.IsAvailable(providerOneProxyURL))
+	require.Equal(t, 1, selector.activeProvider)
+	require.Equal(t, 0, selector.providers[0].nextUser)
+	require.Equal(t, 1, selector.reservations[providerOneProxyURL])
+
+	selector.ReportSuccess(staleSuccessfulLease)
+	require.True(t, selector.IsAvailable(providerOneProxyURL))
+	require.Equal(t, 1, selector.activeProvider)
+	require.Equal(t, 0, selector.providers[0].nextUser)
+	require.NotContains(t, selector.reservations, providerOneProxyURL)
+
+	selector.ReportSuccess(staleSuccessfulLease)
+	require.NotContains(t, selector.reservations, providerOneProxyURL)
+
+	selector.Release(providerTwoLease)
+	nextLease, err := selector.AcquireRequired()
+	require.NoError(t, err)
+	require.Equal(t, providerTwoProxyURL, nextLease.ProxyURL)
+}
+
 func TestProxyLeaseSelectorAcquireRequiredAndFlatProxyFallback(t *testing.T) {
 	t.Parallel()
 

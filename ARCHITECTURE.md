@@ -54,7 +54,9 @@ only the helpers they need.
   reuses the least-reserved healthy lease instead of treating reservations as
   candidate exhaustion. Neutral terminal crawler responses release their lease
   without recording proxy success or failure, so reservations only reflect
-  active in-flight requests.
+  active in-flight requests. Stale-generation successes still clear proxy
+  health and release their reservation, but they do not rewind provider/user
+  cursors that were advanced by a concurrent failure.
 - `ProxyLeaseAttemptScope` is caller-created for one scrape or request batch. It
   remembers which leases failed during that operation, skips those leases on
   later acquisitions, and returns `ErrProxyLeaseCandidatesExhausted` once every
