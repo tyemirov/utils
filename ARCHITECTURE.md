@@ -68,7 +68,11 @@ only the helpers they need.
   `RetryDecision.ProxyFailureKind` and proxy failure diagnostics keep challenge,
   status, transport, provider-auth, and provider-account reasons structured so
   shared selector pools can avoid health cooldowns for content challenges and
-  explain candidate exhaustion with reason buckets.
+  explain candidate exhaustion with reason buckets. Provider credential
+  failures such as HTTP 402, HTTP 407, `Payment Required`, and
+  `Proxy Authentication Required` immediately quarantine the affected lease and
+  retry only alternate proxy candidates; ordinary status-0 transport failures
+  remain on the transient retry path.
 
 ## LLM Module (`llm`)
 

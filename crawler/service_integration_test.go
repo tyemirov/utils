@@ -427,6 +427,161 @@ func TestHandleCollectorErrorHandlesMissingRequest(t *testing.T) {
 	require.Contains(t, logger.errors[0], testErr.Error())
 }
 
+func TestHandleCollectorErrorQuarantinesPaymentRequiredProxyAndRetriesAlternate(t *testing.T) {
+	selector, err := NewProxyLeaseSelectorWithOptions(
+		[]ProxyRotationProviderConfig{
+			{
+				Name: "provider-one",
+				Users: []ProxyRotationUserConfig{{
+					Name: "user-one",
+					URL:  "http://proxy-one.example:8080",
+				}},
+			},
+			{
+				Name: "provider-two",
+				Users: []ProxyRotationUserConfig{{
+					Name: "user-one",
+					URL:  "http://proxy-two.example:8080",
+				}},
+			},
+		},
+		ProxyLeaseSelectorCircuitBreaker(true),
+		ProxyLeaseSelectorClock(func() time.Time { return time.Unix(0, 0) }),
+	)
+	require.NoError(t, err)
+	lease, err := selector.AcquireRequired()
+	require.NoError(t, err)
+	processor := &stubResponseProcessor{}
+	retryHandler := &stubRetryHandler{result: true}
+	logger := &capturingLogger{}
+	response := newTestResponse("ASIN-PAYMENT")
+	response.StatusCode = 0
+	response.Request.ProxyURL = lease.ProxyURL
+	response.Request.URL = mustParseCrawlerTestURL(t, "https://example.com/dp/ASIN-PAYMENT")
+	attachTrackedProxySelection(response.Request, lease)
+
+	handleCollectorError(response, errors.New("Payment Required"), processor, retryHandler, selector, logger)
+
+	require.False(t, selector.IsAvailable(lease.ProxyURL))
+	nextLease, err := selector.AcquireRequired()
+	require.NoError(t, err)
+	require.Equal(t, "http://proxy-two.example:8080", nextLease.ProxyURL)
+	require.Empty(t, processor.results)
+	require.Len(t, retryHandler.calls, 1)
+	require.True(t, retryHandler.options[0].SkipDelay)
+	require.True(t, retryHandler.options[0].LimitRetries)
+	require.Equal(t, 1, retryHandler.options[0].MaxRetries)
+}
+
+func TestHandleCollectorErrorFailsFastForSingleProxyAuthenticationFailure(t *testing.T) {
+	selector, err := NewProxyLeaseSelectorWithOptions(
+		[]ProxyRotationProviderConfig{{
+			Name: "provider-one",
+			Users: []ProxyRotationUserConfig{{
+				Name: "user-one",
+				URL:  "http://proxy-one.example:8080",
+			}},
+		}},
+		ProxyLeaseSelectorCircuitBreaker(true),
+		ProxyLeaseSelectorClock(func() time.Time { return time.Unix(0, 0) }),
+	)
+	require.NoError(t, err)
+	lease, err := selector.AcquireRequired()
+	require.NoError(t, err)
+	processor := &stubResponseProcessor{}
+	retryHandler := &stubRetryHandler{result: true}
+	logger := &capturingLogger{}
+	response := newTestResponse("ASIN-AUTH")
+	response.StatusCode = http.StatusProxyAuthRequired
+	response.Request.ProxyURL = lease.ProxyURL
+	response.Request.URL = mustParseCrawlerTestURL(t, "https://example.com/dp/ASIN-AUTH")
+	attachTrackedProxySelection(response.Request, lease)
+
+	handleCollectorError(response, errors.New("Proxy Authentication Required"), processor, retryHandler, selector, logger)
+
+	require.False(t, selector.IsAvailable(lease.ProxyURL))
+	require.Empty(t, retryHandler.calls)
+	require.Len(t, processor.results, 1)
+	require.Equal(t, "ASIN-AUTH", processor.results[0].productID)
+	require.Equal(t, http.StatusProxyAuthRequired, processor.results[0].statusCode)
+	require.Equal(t, "Proxy Authentication Required", processor.results[0].errorText)
+}
+
+func TestHandleCollectorErrorFailsFastForPaymentRequiredStatus(t *testing.T) {
+	selector, err := NewProxyLeaseSelectorWithOptions(
+		[]ProxyRotationProviderConfig{{
+			Name: "provider-one",
+			Users: []ProxyRotationUserConfig{{
+				Name: "user-one",
+				URL:  "http://proxy-one.example:8080",
+			}},
+		}},
+		ProxyLeaseSelectorCircuitBreaker(true),
+		ProxyLeaseSelectorClock(func() time.Time { return time.Unix(0, 0) }),
+	)
+	require.NoError(t, err)
+	lease, err := selector.AcquireRequired()
+	require.NoError(t, err)
+	processor := &stubResponseProcessor{}
+	retryHandler := &stubRetryHandler{result: true}
+	logger := &capturingLogger{}
+	response := newTestResponse("ASIN-ACCOUNT")
+	response.StatusCode = http.StatusPaymentRequired
+	response.Request.ProxyURL = lease.ProxyURL
+	response.Request.URL = mustParseCrawlerTestURL(t, "https://example.com/dp/ASIN-ACCOUNT")
+	attachTrackedProxySelection(response.Request, lease)
+
+	handleCollectorError(response, errors.New("Payment Required"), processor, retryHandler, selector, logger)
+
+	require.False(t, selector.IsAvailable(lease.ProxyURL))
+	require.Empty(t, retryHandler.calls)
+	require.Len(t, processor.results, 1)
+	require.Equal(t, "ASIN-ACCOUNT", processor.results[0].productID)
+	require.Equal(t, http.StatusPaymentRequired, processor.results[0].statusCode)
+	require.Equal(t, "Payment Required", processor.results[0].errorText)
+}
+
+func TestHandleCollectorErrorKeepsOrdinaryStatusZeroOnTransientRetryPath(t *testing.T) {
+	selector, err := NewProxyLeaseSelectorWithOptions(
+		[]ProxyRotationProviderConfig{{
+			Name: "provider-one",
+			Users: []ProxyRotationUserConfig{{
+				Name: "user-one",
+				URL:  "http://proxy-one.example:8080",
+			}},
+		}},
+		ProxyLeaseSelectorCircuitBreaker(true),
+		ProxyLeaseSelectorClock(func() time.Time { return time.Unix(0, 0) }),
+	)
+	require.NoError(t, err)
+	lease, err := selector.AcquireRequired()
+	require.NoError(t, err)
+	processor := &stubResponseProcessor{}
+	retryHandler := &stubRetryHandler{result: true}
+	logger := &capturingLogger{}
+	response := newTestResponse("ASIN-RESET")
+	response.StatusCode = 0
+	response.Request.ProxyURL = lease.ProxyURL
+	response.Request.URL = mustParseCrawlerTestURL(t, "https://example.com/dp/ASIN-RESET")
+	attachTrackedProxySelection(response.Request, lease)
+
+	handleCollectorError(response, errors.New("connection reset"), processor, retryHandler, selector, logger)
+
+	require.True(t, selector.IsAvailable(lease.ProxyURL))
+	require.Empty(t, processor.results)
+	require.Len(t, retryHandler.calls, 1)
+	require.False(t, retryHandler.options[0].SkipDelay)
+	require.False(t, retryHandler.options[0].LimitRetries)
+	require.Zero(t, retryHandler.options[0].MaxRetries)
+}
+
+func mustParseCrawlerTestURL(t *testing.T, rawURL string) *url.URL {
+	t.Helper()
+	parsedURL, err := url.Parse(rawURL)
+	require.NoError(t, err)
+	return parsedURL
+}
+
 func TestHandleCollectorErrorInitializesMissingContext(t *testing.T) {
 	tracker := &trackingProxyHealth{}
 	processor := &stubResponseProcessor{}

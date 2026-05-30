@@ -33,6 +33,10 @@ Reusable crawler primitives for proxy-aware scraping workloads.
   as challenge, status, transport, provider auth, and provider account reasons
   so shared selector pools can rotate content challenges without poisoning proxy
   health and can explain exhausted candidate pools.
+- **Provider credential failures** - Status 402, status 407, `Payment Required`,
+  and `Proxy Authentication Required` errors quarantine the affected lease and
+  retry only alternate proxy candidates instead of burning the normal retry
+  budget.
 - **ProxyLeaseAttemptScope** - Track failed leases for one scrape or request
   batch so callers can skip candidates that already failed during that
   operation and stop with a typed exhausted-candidates error.

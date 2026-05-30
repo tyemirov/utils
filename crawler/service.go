@@ -277,7 +277,12 @@ func setupErrorHandling(collector *colly.Collector, processor ResponseProcessor,
 }
 
 func handleCollectorError(resp *colly.Response, err error, processor ResponseProcessor, retryHandler RetryHandler, tracker proxyHealth, logger Logger) {
-	recordProxyFailureWithError(tracker, resp, err)
+	statusCode := 0
+	if resp != nil {
+		statusCode = resp.StatusCode
+	}
+	diagnostic := classifyProxyFailureDiagnostic(statusCode, errorString(err))
+	recordProxyFailureWithDiagnostic(tracker, resp, diagnostic)
 	urlValue, statusCode, proxyURL := extractErrorLogFields(resp)
 	logger.Error("URL: %s, StatusCode: %d, Proxy: %s, Error: %v", urlValue, statusCode, describeProxyForLog(proxyURL), err)
 
@@ -296,6 +301,13 @@ func handleCollectorError(resp *colly.Response, err error, processor ResponsePro
 	resp.Ctx.Put(ctxHTTPStatusCodeKey, resp.StatusCode)
 	resp.Ctx.Put(ctxProductErrorKey, err)
 
+	if diagnostic.providerCredentialFailure() {
+		if retryProviderCredentialProxyError(resp, retryHandler, tracker) {
+			return
+		}
+		processor.SendFinalResult(resp, false, errorText)
+		return
+	}
 	if resp.StatusCode == http.StatusNotFound {
 		processor.SendFinalResult(resp, false, errorText)
 		return
@@ -334,13 +346,21 @@ func recordProxyFailure(tracker proxyHealth, resp *colly.Response) {
 }
 
 func recordProxyFailureWithError(tracker proxyHealth, resp *colly.Response, err error) {
+	statusCode := 0
+	if resp != nil {
+		statusCode = resp.StatusCode
+	}
+	recordProxyFailureWithDiagnostic(tracker, resp, classifyProxyFailureDiagnostic(statusCode, errorString(err)))
+}
+
+func recordProxyFailureWithDiagnostic(tracker proxyHealth, resp *colly.Response, diagnostic ProxyFailureDiagnostic) {
 	if tracker == nil || resp == nil || resp.Request == nil {
 		return
 	}
 	if resp.Request.ProxyURL == "" {
 		return
 	}
-	if !shouldRecordProxyFailure(resp.StatusCode) {
+	if !shouldRecordProxyFailureDiagnostic(resp.StatusCode, diagnostic) {
 		if lease, found := selectedProxySelectionFromResponse(resp); found {
 			if releaser, ok := tracker.(proxyLeaseReleaser); ok {
 				releaser.Release(lease)
@@ -348,16 +368,27 @@ func recordProxyFailureWithError(tracker proxyHealth, resp *colly.Response, err 
 		}
 		return
 	}
-	diagnostic := classifyProxyFailureDiagnostic(resp.StatusCode, errorString(err))
 	if lease, found := selectedProxySelectionFromResponse(resp); found {
 		if diagnosticReporter, ok := tracker.(proxyLeaseDiagnosticReporter); ok {
+			if diagnostic.providerCredentialFailure() {
+				diagnosticReporter.ReportCriticalFailureWithDiagnostic(lease, diagnostic)
+				return
+			}
 			diagnosticReporter.ReportFailureWithDiagnostic(lease, diagnostic)
 			return
 		}
 		if reporter, ok := tracker.(proxyLeaseReporter); ok {
+			if diagnostic.providerCredentialFailure() {
+				reporter.ReportCriticalFailure(lease)
+				return
+			}
 			reporter.ReportFailure(lease)
 			return
 		}
+	}
+	if diagnostic.providerCredentialFailure() {
+		tracker.RecordCriticalFailure(resp.Request.ProxyURL)
+		return
 	}
 	tracker.RecordFailure(resp.Request.ProxyURL)
 }
@@ -376,6 +407,29 @@ func shouldRecordProxyFailure(statusCode int) bool {
 	default:
 		return false
 	}
+}
+
+func shouldRecordProxyFailureDiagnostic(statusCode int, diagnostic ProxyFailureDiagnostic) bool {
+	return shouldRecordProxyFailure(statusCode) || diagnostic.providerCredentialFailure()
+}
+
+func retryProviderCredentialProxyError(resp *colly.Response, retryHandler RetryHandler, tracker proxyHealth) bool {
+	if retryHandler == nil || resp == nil || resp.Request == nil || resp.Request.URL == nil {
+		return false
+	}
+	candidateCounter, ok := tracker.(proxyCandidateCounter)
+	if !ok {
+		return false
+	}
+	alternativeProxyRetryCount := candidateCounter.CandidateCount() - 1
+	if alternativeProxyRetryCount <= 0 {
+		return false
+	}
+	return retryHandler.Retry(resp, RetryOptions{
+		SkipDelay:    true,
+		LimitRetries: true,
+		MaxRetries:   alternativeProxyRetryCount,
+	})
 }
 
 func (service *Service) reserveProductSlot(ctx context.Context, productID string) error {
