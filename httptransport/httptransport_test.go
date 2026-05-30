@@ -15,6 +15,9 @@ import (
 )
 
 func TestNewClientSupportsDirectAndHTTPProxy(t *testing.T) {
+	t.Setenv("HTTP_PROXY", "http://env-proxy.example.com:8080")
+	t.Setenv("HTTPS_PROXY", "http://env-secure-proxy.example.com:8080")
+
 	client, clientError := NewClient(Profile{}, 0)
 	if clientError != nil {
 		t.Fatalf("NewClient(direct) error = %v", clientError)
@@ -26,8 +29,8 @@ func TestNewClientSupportsDirectAndHTTPProxy(t *testing.T) {
 	if !ok {
 		t.Fatalf("Transport type = %T", client.Transport)
 	}
-	if transport.Proxy == nil {
-		t.Fatal("expected proxy func")
+	if transport.Proxy != nil {
+		t.Fatalf("direct transport Proxy type = %T", transport.Proxy)
 	}
 
 	client, clientError = NewClient(Profile{
@@ -54,6 +57,34 @@ func TestNewClientSupportsDirectAndHTTPProxy(t *testing.T) {
 	}
 	if proxyURL == nil || proxyURL.String() != "http://proxy.example.com:8080" {
 		t.Fatalf("Proxy() = %v", proxyURL)
+	}
+}
+
+func TestNewClientKeepsSOCKSProfileDistinctFromEnvironmentProxy(t *testing.T) {
+	t.Setenv("HTTP_PROXY", "http://env-proxy.example.com:8080")
+	t.Setenv("HTTPS_PROXY", "http://env-secure-proxy.example.com:8080")
+
+	restoreHooks := resetHTTPTransportHooks()
+	defer restoreHooks()
+	proxyFromURL = func(parsedURL *url.URL, forward proxy.Dialer) (proxy.Dialer, error) {
+		return contextDialerFunc(func(ctx context.Context, network string, address string) (net.Conn, error) {
+			return nil, errors.New("dialer used")
+		}), nil
+	}
+
+	client, clientError := NewClient(Profile{URL: "socks5://proxy.example.com:1080"}, time.Second)
+	if clientError != nil {
+		t.Fatalf("NewClient(socks proxy) error = %v", clientError)
+	}
+	transport, ok := client.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("Transport type = %T", client.Transport)
+	}
+	if transport.Proxy != nil {
+		t.Fatalf("SOCKS transport Proxy type = %T", transport.Proxy)
+	}
+	if transport.DialContext == nil {
+		t.Fatal("SOCKS transport DialContext = nil")
 	}
 }
 

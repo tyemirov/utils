@@ -39,6 +39,10 @@ type proxyLeaseSelectionLookup interface {
 	SelectionForProxyURL(proxyURL string) (ProxySelection, bool)
 }
 
+type proxyCandidateCounter interface {
+	CandidateCount() int
+}
+
 type proxyHealthTracker struct {
 	logger           Logger
 	mu               sync.Mutex

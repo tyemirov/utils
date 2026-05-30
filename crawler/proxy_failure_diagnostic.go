@@ -68,6 +68,11 @@ func (diagnostic ProxyFailureDiagnostic) nonHealthPenalizing() bool {
 	return diagnostic.normalized().Kind == ProxyFailureKindChallenge
 }
 
+func (diagnostic ProxyFailureDiagnostic) providerCredentialFailure() bool {
+	kind := diagnostic.normalized().Kind
+	return kind == ProxyFailureKindProviderAuth || kind == ProxyFailureKindProviderAccount
+}
+
 func (diagnostic ProxyFailureDiagnostic) bucket() string {
 	normalizedDiagnostic := diagnostic.normalized()
 	switch normalizedDiagnostic.Kind {
