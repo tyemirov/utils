@@ -100,7 +100,6 @@ func NewClient(httpProfile Profile, timeout time.Duration) (*http.Client, error)
 	}
 
 	transport := &http.Transport{
-		Proxy:             http.ProxyFromEnvironment,
 		ForceAttemptHTTP2: true,
 	}
 

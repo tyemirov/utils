@@ -15,7 +15,8 @@ projects.
 - **RenderPage / RenderPages** - One-shot convenience helpers for JS-rendered
   pages.
 - **NewHTTPClient** - Build an HTTP client bound to the same transport profile
-  model.
+  model; direct profiles bypass ambient `HTTP_PROXY`/`HTTPS_PROXY` environment
+  settings while explicit HTTP and SOCKS profiles stay profile-bound.
 
 ## Crawler
 Reusable crawler primitives for proxy-aware scraping workloads.
