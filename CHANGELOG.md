@@ -3,12 +3,20 @@
 ## [Unreleased]
 
 ### Bug Fixes 🐛
+- Make direct `httptransport` profiles bypass ambient `HTTP_PROXY` and `HTTPS_PROXY` environment proxies.
+- Classify proxy auth/account failures separately from transient status-0 transport errors, quarantine the affected lease, and limit retries to alternate proxy candidates.
+- Add structured proxy failure diagnostics and keep challenge/content rotations from cooling shared proxy pools even when misclassified as critical.
+- Clear proxy health from stale-generation lease successes without rewinding provider/user cursors after concurrent failures.
 - Keep normal rotate-proxy retry decisions from recording proxy health failures or cooling down candidates; callers now opt into critical cooldown through `RetryDecision.ProxyFailureSeverity`.
 - Release crawler proxy leases on neutral terminal response paths so binary responses, page-not-found titles, no-title exhaustion, and incomplete-content exhaustion do not leave stale reservations behind.
 - Reuse the least-reserved healthy proxy lease when every configured lease is already reserved by in-flight requests.
 - Reject trailing YAML documents in `configfile` loads instead of silently ignoring documents after the first one.
 
 ### Testing 🧪
+- Add HTTP transport regressions proving direct, explicit HTTP proxy, and SOCKS profiles stay distinct when environment proxies are set.
+- Add crawler regressions for status-0 `Payment Required`, HTTP 402, HTTP 407, and ordinary status-0 transport failures.
+- Add crawler regressions for critical CAPTCHA rotation, diagnostic candidate exhaustion buckets, operation-scope challenge failures, and diagnostic reporter branches.
+- Add a crawler regression for stale-generation successes clearing cooldown while preserving active provider cursor state.
 - Add crawler response coverage for rotation-only normal retry reports and explicit critical cooldown.
 - Add crawler response regression coverage for neutral terminal proxy lease release.
 - Add a crawler regression covering saturated proxy lease selection through the public HTTP proxy selector path.

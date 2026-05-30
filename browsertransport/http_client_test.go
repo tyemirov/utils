@@ -8,6 +8,9 @@ import (
 )
 
 func TestNewHTTPClientSupportsDirectAndHTTPProxy(t *testing.T) {
+	t.Setenv("HTTP_PROXY", "http://env-proxy.example.com:8080")
+	t.Setenv("HTTPS_PROXY", "http://env-secure-proxy.example.com:8080")
+
 	client, clientError := NewHTTPClient(HTTPProfile{}, 0)
 	if clientError != nil {
 		t.Fatalf("NewHTTPClient(direct) error = %v", clientError)
@@ -19,8 +22,8 @@ func TestNewHTTPClientSupportsDirectAndHTTPProxy(t *testing.T) {
 	if !ok {
 		t.Fatalf("Transport type = %T", client.Transport)
 	}
-	if transport.Proxy == nil {
-		t.Fatal("expected proxy func")
+	if transport.Proxy != nil {
+		t.Fatalf("direct transport Proxy type = %T", transport.Proxy)
 	}
 
 	client, clientError = NewHTTPClient(HTTPProfile{
