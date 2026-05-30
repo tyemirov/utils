@@ -541,6 +541,26 @@ func TestHandleCollectorErrorFailsFastForPaymentRequiredStatus(t *testing.T) {
 	require.Equal(t, "Payment Required", processor.results[0].errorText)
 }
 
+func TestHandleCollectorErrorRetriesDirectPaymentRequiredStatusNormally(t *testing.T) {
+	tracker := &trackingProxyHealth{}
+	processor := &stubResponseProcessor{}
+	retryHandler := &stubRetryHandler{result: true}
+	logger := &capturingLogger{}
+	response := newTestResponse("ASIN-DIRECT-PAYMENT")
+	response.StatusCode = http.StatusPaymentRequired
+	response.Request.URL = mustParseCrawlerTestURL(t, "https://example.com/dp/ASIN-DIRECT-PAYMENT")
+
+	handleCollectorError(response, errors.New("Payment Required"), processor, retryHandler, tracker, logger)
+
+	require.Empty(t, tracker.failures)
+	require.Empty(t, tracker.criticalFailures)
+	require.Empty(t, processor.results)
+	require.Len(t, retryHandler.calls, 1)
+	require.False(t, retryHandler.options[0].SkipDelay)
+	require.False(t, retryHandler.options[0].LimitRetries)
+	require.Zero(t, retryHandler.options[0].MaxRetries)
+}
+
 func TestHandleCollectorErrorKeepsOrdinaryStatusZeroOnTransientRetryPath(t *testing.T) {
 	selector, err := NewProxyLeaseSelectorWithOptions(
 		[]ProxyRotationProviderConfig{{

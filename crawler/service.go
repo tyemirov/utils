@@ -301,7 +301,7 @@ func handleCollectorError(resp *colly.Response, err error, processor ResponsePro
 	resp.Ctx.Put(ctxHTTPStatusCodeKey, resp.StatusCode)
 	resp.Ctx.Put(ctxProductErrorKey, err)
 
-	if diagnostic.providerCredentialFailure() {
+	if proxyCredentialFailureResponse(resp, diagnostic) {
 		if retryProviderCredentialProxyError(resp, retryHandler, tracker) {
 			return
 		}
@@ -411,6 +411,10 @@ func shouldRecordProxyFailure(statusCode int) bool {
 
 func shouldRecordProxyFailureDiagnostic(statusCode int, diagnostic ProxyFailureDiagnostic) bool {
 	return shouldRecordProxyFailure(statusCode) || diagnostic.providerCredentialFailure()
+}
+
+func proxyCredentialFailureResponse(resp *colly.Response, diagnostic ProxyFailureDiagnostic) bool {
+	return diagnostic.providerCredentialFailure() && responseProxyURL(resp) != ""
 }
 
 func retryProviderCredentialProxyError(resp *colly.Response, retryHandler RetryHandler, tracker proxyHealth) bool {
