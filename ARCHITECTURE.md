@@ -40,7 +40,9 @@ only the helpers they need.
 - `browsertransport` owns the reusable runtime for proxy-aware scraping:
   browser transport profiles, long-lived browser sessions, short-lived render
   tabs, SOCKS forwarding, proxy-auth wiring, one-shot page rendering, and HTTP
-  client construction.
+  client construction. Direct HTTP transport profiles bypass ambient
+  `HTTP_PROXY` and `HTTPS_PROXY` environment variables; callers must choose an
+  explicit HTTP or SOCKS profile when a proxy is required.
 - `jseval` stays as a compatibility layer so existing downstream callers can
   keep using `RenderPage` and `RenderPages` without depending on the richer
   transport API directly.

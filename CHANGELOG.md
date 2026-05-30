@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Bug Fixes 🐛
+- Make direct `httptransport` profiles bypass ambient `HTTP_PROXY` and `HTTPS_PROXY` environment proxies.
 - Classify proxy auth/account failures separately from transient status-0 transport errors, quarantine the affected lease, and limit retries to alternate proxy candidates.
 - Add structured proxy failure diagnostics and keep challenge/content rotations from cooling shared proxy pools even when misclassified as critical.
 - Clear proxy health from stale-generation lease successes without rewinding provider/user cursors after concurrent failures.
@@ -12,6 +13,7 @@
 - Reject trailing YAML documents in `configfile` loads instead of silently ignoring documents after the first one.
 
 ### Testing 🧪
+- Add HTTP transport regressions proving direct, explicit HTTP proxy, and SOCKS profiles stay distinct when environment proxies are set.
 - Add crawler regressions for status-0 `Payment Required`, HTTP 402, HTTP 407, and ordinary status-0 transport failures.
 - Add crawler regressions for critical CAPTCHA rotation, diagnostic candidate exhaustion buckets, operation-scope challenge failures, and diagnostic reporter branches.
 - Add a crawler regression for stale-generation successes clearing cooldown while preserving active provider cursor state.
