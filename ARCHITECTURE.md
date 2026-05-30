@@ -65,6 +65,10 @@ only the helpers they need.
   content-level retry decisions rotate away from the current lease without
   recording proxy health failure. Platform hooks opt into critical cooldown with
   `RetryDecision.ProxyFailureSeverity` only when the proxy itself is unhealthy.
+  `RetryDecision.ProxyFailureKind` and proxy failure diagnostics keep challenge,
+  status, transport, provider-auth, and provider-account reasons structured so
+  shared selector pools can avoid health cooldowns for content challenges and
+  explain candidate exhaustion with reason buckets.
 
 ## LLM Module (`llm`)
 

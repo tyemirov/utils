@@ -117,20 +117,22 @@ func ProxyLeaseSelectorClock(now func() time.Time) ProxyLeaseSelectorOption {
 // ProxyLeaseSelector acquires proxy leases from ordered providers and keeps
 // successful leases sticky until a failure advances rotation.
 type ProxyLeaseSelector struct {
-	mu               sync.Mutex
-	providers        []proxyRotationProvider
-	selectionByProxy map[string]proxySelectionIndex
-	activeProvider   int
-	generation       uint64
-	reservations     map[string]int
-	healthTracker    *proxyHealthTracker
+	mu                 sync.Mutex
+	providers          []proxyRotationProvider
+	selectionByProxy   map[string]proxySelectionIndex
+	activeProvider     int
+	generation         uint64
+	reservations       map[string]int
+	healthTracker      *proxyHealthTracker
+	failureDiagnostics map[string]ProxyFailureDiagnostic
 }
 
 // ProxyLeaseAttemptScope tracks failed proxy leases for one scrape, request
 // batch, or other caller-defined operation.
 type ProxyLeaseAttemptScope struct {
-	mu           sync.Mutex
-	failedLeases map[string]struct{}
+	mu                 sync.Mutex
+	failedLeases       map[string]struct{}
+	failureDiagnostics map[string]ProxyFailureDiagnostic
 }
 
 // NewProxyLeaseSelector constructs a provider-aware lease selector.
@@ -212,18 +214,22 @@ func NewProxyLeaseSelectorWithOptions(configs []ProxyRotationProviderConfig, opt
 	}
 
 	return &ProxyLeaseSelector{
-		providers:        providers,
-		selectionByProxy: selectionByProxy,
-		activeProvider:   activeProvider,
-		reservations:     map[string]int{},
-		healthTracker:    healthTracker,
+		providers:          providers,
+		selectionByProxy:   selectionByProxy,
+		activeProvider:     activeProvider,
+		reservations:       map[string]int{},
+		healthTracker:      healthTracker,
+		failureDiagnostics: map[string]ProxyFailureDiagnostic{},
 	}, nil
 }
 
 // NewProxyLeaseAttemptScope constructs an operation-scoped failed-lease
 // tracker.
 func NewProxyLeaseAttemptScope() *ProxyLeaseAttemptScope {
-	return &ProxyLeaseAttemptScope{failedLeases: map[string]struct{}{}}
+	return &ProxyLeaseAttemptScope{
+		failedLeases:       map[string]struct{}{},
+		failureDiagnostics: map[string]ProxyFailureDiagnostic{},
+	}
 }
 
 // Acquire reserves and returns the best current proxy lease.
@@ -293,20 +299,38 @@ func (selector *ProxyLeaseSelector) Release(lease ProxyLease) {
 
 // ReportProxyRetry releases a lease and rotates without recording proxy health failure.
 func (selector *ProxyLeaseSelector) ReportProxyRetry(lease ProxyLease) {
-	selector.reportRotation(lease, proxyLeaseRotationHealthUnchanged)
+	selector.ReportProxyRetryWithDiagnostic(lease, ProxyFailureDiagnostic{})
+}
+
+// ReportProxyRetryWithDiagnostic releases a lease, rotates without recording
+// proxy health failure, and stores the diagnostic reason.
+func (selector *ProxyLeaseSelector) ReportProxyRetryWithDiagnostic(lease ProxyLease, diagnostic ProxyFailureDiagnostic) {
+	selector.reportRotation(lease, proxyLeaseRotationHealthUnchanged, diagnostic)
 }
 
 // ReportFailure releases a lease and rotates immediately to the next provider.
 func (selector *ProxyLeaseSelector) ReportFailure(lease ProxyLease) {
-	selector.reportRotation(lease, proxyLeaseRotationHealthFailure)
+	selector.ReportFailureWithDiagnostic(lease, ProxyFailureDiagnostic{})
+}
+
+// ReportFailureWithDiagnostic releases a lease, records a normal proxy failure,
+// and stores the diagnostic reason.
+func (selector *ProxyLeaseSelector) ReportFailureWithDiagnostic(lease ProxyLease, diagnostic ProxyFailureDiagnostic) {
+	selector.reportRotation(lease, proxyLeaseRotationHealthFailure, diagnostic)
 }
 
 // ReportCriticalFailure releases a lease and immediately cools the proxy.
 func (selector *ProxyLeaseSelector) ReportCriticalFailure(lease ProxyLease) {
-	selector.reportRotation(lease, proxyLeaseRotationHealthCriticalFailure)
+	selector.ReportCriticalFailureWithDiagnostic(lease, ProxyFailureDiagnostic{})
 }
 
-func (selector *ProxyLeaseSelector) reportRotation(lease ProxyLease, healthEffect proxyLeaseRotationHealthEffect) {
+// ReportCriticalFailureWithDiagnostic releases a lease, immediately cools the
+// proxy, and stores the diagnostic reason.
+func (selector *ProxyLeaseSelector) ReportCriticalFailureWithDiagnostic(lease ProxyLease, diagnostic ProxyFailureDiagnostic) {
+	selector.reportRotation(lease, proxyLeaseRotationHealthCriticalFailure, diagnostic)
+}
+
+func (selector *ProxyLeaseSelector) reportRotation(lease ProxyLease, healthEffect proxyLeaseRotationHealthEffect, diagnostic ProxyFailureDiagnostic) {
 	if selector == nil || !lease.Valid() {
 		return
 	}
@@ -319,6 +343,7 @@ func (selector *ProxyLeaseSelector) reportRotation(lease ProxyLease, healthEffec
 	if !found {
 		return
 	}
+	selector.recordFailureDiagnosticLocked(lease.ProxyURL, diagnostic)
 	switch healthEffect {
 	case proxyLeaseRotationHealthCriticalFailure:
 		selector.recordCriticalFailureLocked(lease.ProxyURL)
@@ -357,6 +382,7 @@ func (selector *ProxyLeaseSelector) ReportSuccess(lease ProxyLease) {
 		return
 	}
 	selector.recordSuccessLocked(lease.ProxyURL)
+	selector.clearFailureDiagnosticLocked(lease.ProxyURL)
 	if lease.Generation != selector.generation {
 		return
 	}
@@ -455,9 +481,18 @@ func (scope *ProxyLeaseAttemptScope) AcquireRequired(selector *ProxyLeaseSelecto
 		if !scope.Failed(lease) {
 			return lease, nil
 		}
+		diagnostic, found := scope.FailureDiagnostic(lease)
+		if found && diagnostic.nonHealthPenalizing() {
+			selector.ReportProxyRetryWithDiagnostic(lease, diagnostic)
+			continue
+		}
+		if found {
+			selector.ReportFailureWithDiagnostic(lease, diagnostic)
+			continue
+		}
 		selector.ReportFailure(lease)
 	}
-	return ProxyLease{}, ProxyLeaseCandidatesExhaustedError(candidateCount)
+	return ProxyLease{}, ProxyLeaseCandidatesExhaustedErrorWithDiagnostics(candidateCount, scope.failureDiagnosticList()...)
 }
 
 // Failed reports whether the lease already failed inside this operation scope.
@@ -475,6 +510,12 @@ func (scope *ProxyLeaseAttemptScope) Failed(lease ProxyLease) bool {
 
 // ReportFailure records a lease failure inside this operation scope.
 func (scope *ProxyLeaseAttemptScope) ReportFailure(lease ProxyLease) {
+	scope.ReportFailureWithDiagnostic(lease, ProxyFailureDiagnostic{})
+}
+
+// ReportFailureWithDiagnostic records a lease failure reason inside this
+// operation scope.
+func (scope *ProxyLeaseAttemptScope) ReportFailureWithDiagnostic(lease ProxyLease, diagnostic ProxyFailureDiagnostic) {
 	if scope == nil || !lease.Valid() {
 		return
 	}
@@ -485,7 +526,27 @@ func (scope *ProxyLeaseAttemptScope) ReportFailure(lease ProxyLease) {
 	if scope.failedLeases == nil {
 		scope.failedLeases = map[string]struct{}{}
 	}
-	scope.failedLeases[proxyLeaseAttemptScopeKey(lease)] = struct{}{}
+	leaseKey := proxyLeaseAttemptScopeKey(lease)
+	scope.failedLeases[leaseKey] = struct{}{}
+	if diagnostic.hasDiagnostic() {
+		if scope.failureDiagnostics == nil {
+			scope.failureDiagnostics = map[string]ProxyFailureDiagnostic{}
+		}
+		scope.failureDiagnostics[leaseKey] = diagnostic.normalized()
+	}
+}
+
+// FailureDiagnostic reports the recorded failure reason for a lease.
+func (scope *ProxyLeaseAttemptScope) FailureDiagnostic(lease ProxyLease) (ProxyFailureDiagnostic, bool) {
+	if scope == nil || !lease.Valid() {
+		return ProxyFailureDiagnostic{}, false
+	}
+
+	scope.mu.Lock()
+	defer scope.mu.Unlock()
+
+	diagnostic, found := scope.failureDiagnostics[proxyLeaseAttemptScopeKey(lease)]
+	return diagnostic, found
 }
 
 // Exhausted reports whether every configured candidate has failed inside this
@@ -505,6 +566,16 @@ func (scope *ProxyLeaseAttemptScope) Exhausted(candidateCount int) bool {
 // with the attempted candidate count.
 func ProxyLeaseCandidatesExhaustedError(candidateCount int) error {
 	return fmt.Errorf("%w: all %d configured proxy candidate(s) failed", ErrProxyLeaseCandidatesExhausted, candidateCount)
+}
+
+// ProxyLeaseCandidatesExhaustedErrorWithDiagnostics wraps
+// ErrProxyLeaseCandidatesExhausted with candidate count and reason buckets.
+func ProxyLeaseCandidatesExhaustedErrorWithDiagnostics(candidateCount int, diagnostics ...ProxyFailureDiagnostic) error {
+	summary := proxyFailureDiagnosticSummary(diagnostics)
+	if summary == "" {
+		return ProxyLeaseCandidatesExhaustedError(candidateCount)
+	}
+	return fmt.Errorf("%w: all %d configured proxy candidate(s) failed; unavailable reasons: %s", ErrProxyLeaseCandidatesExhausted, candidateCount, summary)
 }
 
 func proxyLeaseAttemptScopeKey(lease ProxyLease) string {
@@ -532,7 +603,7 @@ func (selector *ProxyLeaseSelector) acquire() (ProxyLease, error) {
 	}
 	lease := selector.acquireLocked()
 	if !lease.Valid() {
-		return ProxyLease{}, ProxyLeaseCandidatesExhaustedError(candidateCount)
+		return ProxyLease{}, ProxyLeaseCandidatesExhaustedErrorWithDiagnostics(candidateCount, selector.unavailableDiagnosticsLocked()...)
 	}
 	selector.reservations[lease.ProxyURL]++
 	return lease, nil
@@ -663,6 +734,48 @@ func (selector *ProxyLeaseSelector) recordCriticalFailureLocked(proxyURL string)
 	if selector.healthTracker != nil {
 		selector.healthTracker.RecordCriticalFailure(proxyURL)
 	}
+}
+
+func (selector *ProxyLeaseSelector) recordFailureDiagnosticLocked(proxyURL string, diagnostic ProxyFailureDiagnostic) {
+	if !diagnostic.hasDiagnostic() {
+		return
+	}
+	if selector.failureDiagnostics == nil {
+		selector.failureDiagnostics = map[string]ProxyFailureDiagnostic{}
+	}
+	selector.failureDiagnostics[strings.TrimSpace(proxyURL)] = diagnostic.normalized()
+}
+
+func (selector *ProxyLeaseSelector) clearFailureDiagnosticLocked(proxyURL string) {
+	delete(selector.failureDiagnostics, strings.TrimSpace(proxyURL))
+}
+
+func (selector *ProxyLeaseSelector) unavailableDiagnosticsLocked() []ProxyFailureDiagnostic {
+	diagnostics := make([]ProxyFailureDiagnostic, 0)
+	for _, provider := range selector.providers {
+		for _, user := range provider.users {
+			if selector.isAvailableLocked(user.raw) {
+				continue
+			}
+			diagnostic, found := selector.failureDiagnostics[user.raw]
+			if !found {
+				diagnostic = newProxyFailureDiagnostic(ProxyFailureKindUnknown, "", 0)
+			}
+			diagnostics = append(diagnostics, diagnostic)
+		}
+	}
+	return diagnostics
+}
+
+func (scope *ProxyLeaseAttemptScope) failureDiagnosticList() []ProxyFailureDiagnostic {
+	scope.mu.Lock()
+	defer scope.mu.Unlock()
+
+	diagnostics := make([]ProxyFailureDiagnostic, 0, len(scope.failureDiagnostics))
+	for _, diagnostic := range scope.failureDiagnostics {
+		diagnostics = append(diagnostics, diagnostic)
+	}
+	return diagnostics
 }
 
 func (selector *ProxyLeaseSelector) releaseLocked(lease ProxyLease) {

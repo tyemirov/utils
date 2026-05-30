@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Bug Fixes 🐛
+- Add structured proxy failure diagnostics and keep challenge/content rotations from cooling shared proxy pools even when misclassified as critical.
 - Clear proxy health from stale-generation lease successes without rewinding provider/user cursors after concurrent failures.
 - Keep normal rotate-proxy retry decisions from recording proxy health failures or cooling down candidates; callers now opt into critical cooldown through `RetryDecision.ProxyFailureSeverity`.
 - Release crawler proxy leases on neutral terminal response paths so binary responses, page-not-found titles, no-title exhaustion, and incomplete-content exhaustion do not leave stale reservations behind.
@@ -10,6 +11,7 @@
 - Reject trailing YAML documents in `configfile` loads instead of silently ignoring documents after the first one.
 
 ### Testing 🧪
+- Add crawler regressions for critical CAPTCHA rotation, diagnostic candidate exhaustion buckets, operation-scope challenge failures, and diagnostic reporter branches.
 - Add a crawler regression for stale-generation successes clearing cooldown while preserving active provider cursor state.
 - Add crawler response coverage for rotation-only normal retry reports and explicit critical cooldown.
 - Add crawler response regression coverage for neutral terminal proxy lease release.

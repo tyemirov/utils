@@ -277,7 +277,7 @@ func setupErrorHandling(collector *colly.Collector, processor ResponseProcessor,
 }
 
 func handleCollectorError(resp *colly.Response, err error, processor ResponseProcessor, retryHandler RetryHandler, tracker proxyHealth, logger Logger) {
-	recordProxyFailure(tracker, resp)
+	recordProxyFailureWithError(tracker, resp, err)
 	urlValue, statusCode, proxyURL := extractErrorLogFields(resp)
 	logger.Error("URL: %s, StatusCode: %d, Proxy: %s, Error: %v", urlValue, statusCode, describeProxyForLog(proxyURL), err)
 
@@ -330,6 +330,10 @@ func extractErrorLogFields(resp *colly.Response) (urlValue string, statusCode in
 }
 
 func recordProxyFailure(tracker proxyHealth, resp *colly.Response) {
+	recordProxyFailureWithError(tracker, resp, nil)
+}
+
+func recordProxyFailureWithError(tracker proxyHealth, resp *colly.Response, err error) {
 	if tracker == nil || resp == nil || resp.Request == nil {
 		return
 	}
@@ -344,13 +348,25 @@ func recordProxyFailure(tracker proxyHealth, resp *colly.Response) {
 		}
 		return
 	}
+	diagnostic := classifyProxyFailureDiagnostic(resp.StatusCode, errorString(err))
 	if lease, found := selectedProxySelectionFromResponse(resp); found {
+		if diagnosticReporter, ok := tracker.(proxyLeaseDiagnosticReporter); ok {
+			diagnosticReporter.ReportFailureWithDiagnostic(lease, diagnostic)
+			return
+		}
 		if reporter, ok := tracker.(proxyLeaseReporter); ok {
 			reporter.ReportFailure(lease)
 			return
 		}
 	}
 	tracker.RecordFailure(resp.Request.ProxyURL)
+}
+
+func errorString(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
 }
 
 func shouldRecordProxyFailure(statusCode int) bool {

@@ -18,8 +18,17 @@ type proxyLeaseReporter interface {
 	ReportCriticalFailure(lease ProxyLease)
 }
 
+type proxyLeaseDiagnosticReporter interface {
+	ReportFailureWithDiagnostic(lease ProxyLease, diagnostic ProxyFailureDiagnostic)
+	ReportCriticalFailureWithDiagnostic(lease ProxyLease, diagnostic ProxyFailureDiagnostic)
+}
+
 type proxyLeaseRetryReporter interface {
 	ReportProxyRetry(lease ProxyLease)
+}
+
+type proxyLeaseDiagnosticRetryReporter interface {
+	ReportProxyRetryWithDiagnostic(lease ProxyLease, diagnostic ProxyFailureDiagnostic)
 }
 
 type proxyLeaseReleaser interface {

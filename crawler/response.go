@@ -271,30 +271,62 @@ func (processor *responseProcessor) alternativeProxyRetryCount() int {
 }
 
 func (processor *responseProcessor) recordProxyRetryFailure(resp *colly.Response, decision RetryDecision) {
-	if decision.ProxyFailureSeverity == RetryProxyFailureSeverityCritical {
-		processor.recordCriticalProxyFailure(resp)
+	diagnostic := decision.proxyFailureDiagnostic(resp.StatusCode)
+	if diagnostic.nonHealthPenalizing() {
+		processor.recordContentProxyRetry(resp, diagnostic)
 		return
 	}
-	processor.recordNormalProxyFailure(resp)
+	if decision.ProxyFailureSeverity == RetryProxyFailureSeverityCritical {
+		processor.recordCriticalProxyFailureWithDiagnostic(resp, diagnostic)
+		return
+	}
+	processor.recordNormalProxyFailureWithDiagnostic(resp, diagnostic)
 }
 
 func (processor *responseProcessor) recordNormalProxyFailure(resp *colly.Response) {
+	processor.recordNormalProxyFailureWithDiagnostic(resp, ProxyFailureDiagnostic{})
+}
+
+func (processor *responseProcessor) recordNormalProxyFailureWithDiagnostic(resp *colly.Response, diagnostic ProxyFailureDiagnostic) {
 	proxyURL := responseProxyURL(resp)
 	if processor.proxyTracker == nil || proxyURL == "" {
 		return
 	}
-	if processor.reportProxyRetry(resp, proxyURL) {
+	if processor.reportProxyRetryWithDiagnostic(resp, proxyURL, diagnostic) {
 		return
 	}
 	processor.proxyTracker.RecordFailure(proxyURL)
 }
 
 func (processor *responseProcessor) reportProxyRetry(resp *colly.Response, proxyURL string) bool {
+	return processor.reportProxyRetryWithDiagnostic(resp, proxyURL, ProxyFailureDiagnostic{})
+}
+
+func (processor *responseProcessor) recordContentProxyRetry(resp *colly.Response, diagnostic ProxyFailureDiagnostic) {
+	proxyURL := responseProxyURL(resp)
+	if processor.proxyTracker == nil || proxyURL == "" {
+		return
+	}
+	if processor.reportProxyRetryWithDiagnostic(resp, proxyURL, diagnostic) {
+		return
+	}
+	if lease, found := selectedProxySelectionFromResponse(resp); found {
+		if releaser, ok := processor.proxyTracker.(proxyLeaseReleaser); ok {
+			releaser.Release(lease)
+		}
+	}
+}
+
+func (processor *responseProcessor) reportProxyRetryWithDiagnostic(resp *colly.Response, proxyURL string, diagnostic ProxyFailureDiagnostic) bool {
 	retryReporter, ok := processor.proxyTracker.(proxyLeaseRetryReporter)
 	if !ok {
 		return false
 	}
 	if lease, found := selectedProxySelectionFromResponse(resp); found {
+		if diagnosticReporter, ok := processor.proxyTracker.(proxyLeaseDiagnosticRetryReporter); ok {
+			diagnosticReporter.ReportProxyRetryWithDiagnostic(lease, diagnostic)
+			return true
+		}
 		retryReporter.ReportProxyRetry(lease)
 		return true
 	}
@@ -306,16 +338,28 @@ func (processor *responseProcessor) reportProxyRetry(resp *colly.Response, proxy
 	if !found {
 		return false
 	}
+	if diagnosticReporter, ok := processor.proxyTracker.(proxyLeaseDiagnosticRetryReporter); ok {
+		diagnosticReporter.ReportProxyRetryWithDiagnostic(lease, diagnostic)
+		return true
+	}
 	retryReporter.ReportProxyRetry(lease)
 	return true
 }
 
 func (processor *responseProcessor) recordCriticalProxyFailure(resp *colly.Response) {
+	processor.recordCriticalProxyFailureWithDiagnostic(resp, ProxyFailureDiagnostic{})
+}
+
+func (processor *responseProcessor) recordCriticalProxyFailureWithDiagnostic(resp *colly.Response, diagnostic ProxyFailureDiagnostic) {
 	proxyURL := responseProxyURL(resp)
 	if processor.proxyTracker == nil || proxyURL == "" {
 		return
 	}
 	if lease, found := selectedProxySelectionFromResponse(resp); found {
+		if diagnosticReporter, ok := processor.proxyTracker.(proxyLeaseDiagnosticReporter); ok {
+			diagnosticReporter.ReportCriticalFailureWithDiagnostic(lease, diagnostic)
+			return
+		}
 		if reporter, ok := processor.proxyTracker.(proxyLeaseReporter); ok {
 			reporter.ReportCriticalFailure(lease)
 			return

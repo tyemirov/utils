@@ -173,6 +173,8 @@ type retryingPlatformHooks struct {
 	retryPolicy          RetryPolicy
 	exhaustionBehavior   RetryExhaustionBehavior
 	proxyFailureSeverity RetryProxyFailureSeverity
+	proxyFailureKind     ProxyFailureKind
+	proxyFailureReason   string
 }
 
 func (hooks retryingPlatformHooks) NormalizeTitle(title string) string {
@@ -211,6 +213,8 @@ func (hooks retryingPlatformHooks) ShouldRetry(_ string, document *goquery.Docum
 			Policy:               hooks.retryPolicy,
 			ExhaustionBehavior:   hooks.exhaustionBehavior,
 			ProxyFailureSeverity: hooks.proxyFailureSeverity,
+			ProxyFailureKind:     hooks.proxyFailureKind,
+			ProxyFailureReason:   hooks.proxyFailureReason,
 		}
 	}
 	return RetryDecision{}
@@ -399,6 +403,70 @@ func TestHandleResponseRotateProxyRetryCanRequestCriticalCooldown(t *testing.T) 
 
 	require.Empty(t, tracker.failures)
 	require.Equal(t, []string{"http://proxy-one.test:8080"}, tracker.criticalFailures)
+	require.Len(t, retryHandler.calls, 1)
+	require.True(t, retryHandler.options[0].SkipDelay)
+}
+
+func TestHandleResponseCriticalChallengeRotatesWithoutCoolingProxy(t *testing.T) {
+	results := make(chan *Result, 1)
+	retryHandler := &stubRetryHandler{result: true}
+	selector, err := NewProxyLeaseSelectorWithOptions(
+		[]ProxyRotationProviderConfig{
+			{
+				Name: "provider-one",
+				Users: []ProxyRotationUserConfig{{
+					Name: "user-one",
+					URL:  "http://proxy-one.test:8080",
+				}},
+			},
+			{
+				Name: "provider-two",
+				Users: []ProxyRotationUserConfig{{
+					Name: "user-one",
+					URL:  "http://proxy-two.test:8080",
+				}},
+			},
+		},
+		ProxyLeaseSelectorCircuitBreaker(true),
+		ProxyLeaseSelectorClock(func() time.Time { return time.Unix(0, 0) }),
+	)
+	require.NoError(t, err)
+	lease, err := selector.AcquireRequired()
+	require.NoError(t, err)
+
+	processor := &responseProcessor{
+		scraperConfig: ScraperConfig{
+			ProxyLeaseSelector: selector,
+		},
+		platformHooks: retryingPlatformHooks{
+			retryMessage:         "reason=CAPTCHA",
+			retryPolicy:          RetryPolicyRotateProxy,
+			proxyFailureSeverity: RetryProxyFailureSeverityCritical,
+		},
+		retryHandler:  retryHandler,
+		ruleEvaluator: &countingRuleEvaluator{},
+		proxyTracker:  selector,
+		results:       results,
+		logger:        noopLogger{},
+	}
+
+	response := newTestResponse("B00TEST123")
+	response.Body = []byte(`<html><head><title>Example Product</title></head><body><div id="wrong-context"></div></body></html>`)
+	response.StatusCode = http.StatusOK
+	headers := http.Header{}
+	response.Headers = &headers
+	response.Request.ProxyURL = lease.ProxyURL
+	attachTrackedProxySelection(response.Request, lease)
+	pageURL, err := url.Parse("https://www.amazon.com/dp/B00TEST123")
+	require.NoError(t, err)
+	response.Request.URL = pageURL
+
+	processor.handleResponse(response)
+
+	require.True(t, selector.IsAvailable(lease.ProxyURL))
+	nextLease, err := selector.AcquireRequired()
+	require.NoError(t, err)
+	require.Equal(t, "http://proxy-two.test:8080", nextLease.ProxyURL)
 	require.Len(t, retryHandler.calls, 1)
 	require.True(t, retryHandler.options[0].SkipDelay)
 }
