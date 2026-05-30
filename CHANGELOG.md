@@ -22,6 +22,38 @@
 - Add a crawler regression covering saturated proxy lease selection through the public HTTP proxy selector path.
 - Add a configfile regression for multi-document YAML streams.
 
+## [v0.16.0] - 2026-05-29
+
+### Features ✨
+- Direct HTTP transport profiles bypass ambient `HTTP_PROXY` and `HTTPS_PROXY` environment variables.
+- Provider credential failures (HTTP 402, 407, Payment Required, Proxy Authentication Required) quarantine affected leases and retry only alternate proxy candidates.
+- Added structured proxy failure diagnostics with challenge, status, transport, provider-auth, and provider-account reasons for better proxy health management.
+
+### Improvements ⚙️
+- Proxy lease selector reuses least-reserved healthy lease under concurrency saturation.
+- Released proxy leases on neutral terminal response paths to avoid stale reservations.
+- Stale-generation successes clear proxy health without rewinding provider/user cursors after concurrent failures.
+- Retry decisions distinguish normal rotate-proxy retries from critical proxy failures using `RetryDecision.ProxyFailureSeverity` and `RetryDecision.ProxyFailureKind`.
+- Reject trailing YAML documents in config loads instead of silently ignoring them.
+- Updated documentation to clarify proxy transport profiles and retry behavior.
+
+### Bug Fixes 🐛
+- Fixed direct HTTP transport proxy bypass issues.
+- Fixed direct payment-required retry handling.
+- Fixed proxy credential failures causing lease quarantine.
+- Fixed critical proxy diagnostics and stale-generation proxy health recovery.
+
+### Testing 🧪
+- Added HTTP transport regression tests for direct, HTTP proxy, and SOCKS profiles with environment proxies set.
+- Added crawler regression tests for payment-required and proxy authentication failures.
+- Added crawler regression tests for critical CAPTCHA rotation and diagnostic candidate exhaustion.
+- Added tests for stale-generation successes clearing cooldown while preserving provider cursor state.
+- Expanded coverage for proxy lease selection, retry handling, and critical proxy diagnostics.
+
+### Docs 📚
+- Updated ARCHITECTURE.md with detailed proxy transport and retry logic explanations.
+- Enhanced README.md with new features and proxy lease selector behavior.
+
 ## [v0.15.4] - 2026-05-19
 
 ### Features ✨
