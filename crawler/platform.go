@@ -44,6 +44,8 @@ type RetryDecision struct {
 	Policy               RetryPolicy
 	ExhaustionBehavior   RetryExhaustionBehavior
 	ProxyFailureSeverity RetryProxyFailureSeverity
+	ProxyFailureKind     ProxyFailureKind
+	ProxyFailureReason   string
 }
 
 // ResolvedLogMessage returns the log message or falls back to the general message.
@@ -52,6 +54,17 @@ func (decision RetryDecision) ResolvedLogMessage() string {
 		return message
 	}
 	return strings.TrimSpace(decision.Message)
+}
+
+func (decision RetryDecision) proxyFailureDiagnostic(statusCode int) ProxyFailureDiagnostic {
+	reason := strings.TrimSpace(decision.ProxyFailureReason)
+	if reason == "" {
+		reason = decision.ResolvedLogMessage()
+	}
+	if decision.ProxyFailureKind != "" {
+		return newProxyFailureDiagnostic(decision.ProxyFailureKind, reason, statusCode)
+	}
+	return classifyProxyFailureDiagnostic(statusCode, reason)
 }
 
 // PlatformHooks provide platform-specific normalisation, content validation,

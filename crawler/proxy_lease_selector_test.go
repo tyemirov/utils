@@ -349,6 +349,46 @@ func TestProxyLeaseSelectorCooldownSkipsPausedLeasesAndExhausts(t *testing.T) {
 	require.False(t, selector.IsAvailable(recoveredLease.ProxyURL))
 }
 
+func TestProxyLeaseSelectorCandidateExhaustionReportsUnavailableDiagnostics(t *testing.T) {
+	t.Parallel()
+
+	currentTime := time.Unix(0, 0)
+	selector, err := NewProxyLeaseSelectorWithOptions(
+		[]ProxyRotationProviderConfig{
+			{
+				Name: "provider-one",
+				Users: []ProxyRotationUserConfig{{
+					Name: "user-one",
+					URL:  "http://provider-one.example:8080",
+				}},
+			},
+			{
+				Name: "provider-two",
+				Users: []ProxyRotationUserConfig{{
+					Name: "user-one",
+					URL:  "http://provider-two.example:8080",
+				}},
+			},
+		},
+		ProxyLeaseSelectorCircuitBreaker(true),
+		ProxyLeaseSelectorClock(func() time.Time { return currentTime }),
+	)
+	require.NoError(t, err)
+
+	firstLease, err := selector.AcquireRequired()
+	require.NoError(t, err)
+	selector.ReportCriticalFailureWithDiagnostic(firstLease, classifyProxyFailureDiagnostic(http.StatusBadGateway, "bad gateway"))
+
+	secondLease, err := selector.AcquireRequired()
+	require.NoError(t, err)
+	selector.ReportCriticalFailureWithDiagnostic(secondLease, classifyProxyFailureDiagnostic(http.StatusProxyAuthRequired, "Proxy Authentication Required"))
+
+	_, err = selector.AcquireRequired()
+	require.ErrorIs(t, err, ErrProxyLeaseCandidatesExhausted)
+	require.ErrorContains(t, err, "status_502=1")
+	require.ErrorContains(t, err, "provider_auth=1")
+}
+
 func TestProxyLeaseSelectorStartsAtConfiguredProvider(t *testing.T) {
 	t.Parallel()
 
@@ -518,6 +558,74 @@ func TestProxyLeaseAttemptScopeSkipsFailedLeasesUntilExhausted(t *testing.T) {
 	_, err = attemptScope.AcquireRequired(selector)
 	require.ErrorIs(t, err, ErrProxyLeaseCandidatesExhausted)
 	require.ErrorContains(t, err, "all 4 configured proxy candidate(s) failed")
+}
+
+func TestProxyLeaseAttemptScopeReportsFailureDiagnostics(t *testing.T) {
+	t.Parallel()
+
+	selector, err := NewProxyLeaseSelectorWithOptions(
+		[]ProxyRotationProviderConfig{
+			{
+				Name: "provider-one",
+				Users: []ProxyRotationUserConfig{{
+					Name: "user-one",
+					URL:  "http://provider-one.example:8080",
+				}},
+			},
+			{
+				Name: "provider-two",
+				Users: []ProxyRotationUserConfig{{
+					Name: "user-one",
+					URL:  "http://provider-two.example:8080",
+				}},
+			},
+		},
+		ProxyLeaseSelectorCircuitBreaker(true),
+	)
+	require.NoError(t, err)
+	attemptScope := NewProxyLeaseAttemptScope()
+
+	firstLease, err := selector.AcquireRequired()
+	require.NoError(t, err)
+	challengeDiagnostic := classifyProxyFailureDiagnostic(http.StatusOK, "reason=CAPTCHA")
+	attemptScope.ReportFailureWithDiagnostic(firstLease, challengeDiagnostic)
+	selector.ReportProxyRetryWithDiagnostic(firstLease, challengeDiagnostic)
+
+	secondLease, err := selector.AcquireRequired()
+	require.NoError(t, err)
+	transportDiagnostic := classifyProxyFailureDiagnostic(0, "connection reset")
+	attemptScope.ReportFailureWithDiagnostic(secondLease, transportDiagnostic)
+	selector.ReportFailureWithDiagnostic(secondLease, transportDiagnostic)
+
+	_, err = attemptScope.AcquireRequired(selector)
+	require.ErrorIs(t, err, ErrProxyLeaseCandidatesExhausted)
+	require.ErrorContains(t, err, "challenge=1")
+	require.ErrorContains(t, err, "status_0=1")
+	require.True(t, selector.IsAvailable(firstLease.ProxyURL))
+}
+
+func TestProxyLeaseCandidatesExhaustedErrorIncludesDiagnosticBuckets(t *testing.T) {
+	t.Parallel()
+
+	err := ProxyLeaseCandidatesExhaustedErrorWithDiagnostics(
+		7,
+		classifyProxyFailureDiagnostic(http.StatusOK, "CAPTCHA"),
+		classifyProxyFailureDiagnostic(0, "connection reset"),
+		classifyProxyFailureDiagnostic(http.StatusBadGateway, "bad gateway"),
+		classifyProxyFailureDiagnostic(http.StatusServiceUnavailable, "unavailable"),
+		classifyProxyFailureDiagnostic(http.StatusGatewayTimeout, "timeout"),
+		classifyProxyFailureDiagnostic(http.StatusPaymentRequired, "Payment Required"),
+		classifyProxyFailureDiagnostic(http.StatusProxyAuthRequired, "Proxy Authentication Required"),
+	)
+
+	require.ErrorIs(t, err, ErrProxyLeaseCandidatesExhausted)
+	require.ErrorContains(t, err, "challenge=1")
+	require.ErrorContains(t, err, "status_0=1")
+	require.ErrorContains(t, err, "status_502=1")
+	require.ErrorContains(t, err, "status_503=1")
+	require.ErrorContains(t, err, "status_504=1")
+	require.ErrorContains(t, err, "provider_account=1")
+	require.ErrorContains(t, err, "provider_auth=1")
 }
 
 func TestProxyLeaseAttemptScopeHandlesNilAndInvalidBranches(t *testing.T) {

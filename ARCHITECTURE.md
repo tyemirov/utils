@@ -40,7 +40,9 @@ only the helpers they need.
 - `browsertransport` owns the reusable runtime for proxy-aware scraping:
   browser transport profiles, long-lived browser sessions, short-lived render
   tabs, SOCKS forwarding, proxy-auth wiring, one-shot page rendering, and HTTP
-  client construction.
+  client construction. Direct HTTP transport profiles bypass ambient
+  `HTTP_PROXY` and `HTTPS_PROXY` environment variables; callers must choose an
+  explicit HTTP or SOCKS profile when a proxy is required.
 - `jseval` stays as a compatibility layer so existing downstream callers can
   keep using `RenderPage` and `RenderPages` without depending on the richer
   transport API directly.
@@ -65,6 +67,14 @@ only the helpers they need.
   content-level retry decisions rotate away from the current lease without
   recording proxy health failure. Platform hooks opt into critical cooldown with
   `RetryDecision.ProxyFailureSeverity` only when the proxy itself is unhealthy.
+  `RetryDecision.ProxyFailureKind` and proxy failure diagnostics keep challenge,
+  status, transport, provider-auth, and provider-account reasons structured so
+  shared selector pools can avoid health cooldowns for content challenges and
+  explain candidate exhaustion with reason buckets. Provider credential
+  failures such as HTTP 402, HTTP 407, `Payment Required`, and
+  `Proxy Authentication Required` immediately quarantine the affected lease and
+  retry only alternate proxy candidates; ordinary status-0 transport failures
+  remain on the transient retry path.
 
 ## LLM Module (`llm`)
 

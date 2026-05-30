@@ -1711,6 +1711,369 @@ func TestRecordProxyFailureWithLeaseReporter(t *testing.T) {
 	require.Equal(t, "http://proxy-two:8080", nextLease.ProxyURL)
 }
 
+func TestProxyFailureDiagnosticCoverageBranches(t *testing.T) {
+	diagnostic := newProxyFailureDiagnostic("", " reason ", 0)
+	require.Equal(t, ProxyFailureKindUnknown, diagnostic.Kind)
+	require.Equal(t, "reason", diagnostic.Reason)
+
+	decision := RetryDecision{
+		ProxyFailureKind:   ProxyFailureKindProviderAccount,
+		ProxyFailureReason: " account suspended ",
+	}
+	diagnostic = decision.proxyFailureDiagnostic(http.StatusPaymentRequired)
+	require.Equal(t, ProxyFailureKindProviderAccount, diagnostic.Kind)
+	require.Equal(t, "account suspended", diagnostic.Reason)
+	require.Equal(t, http.StatusPaymentRequired, diagnostic.StatusCode)
+}
+
+func TestProxyLeaseAttemptScopeDiagnosticCoverageBranches(t *testing.T) {
+	var nilScope *ProxyLeaseAttemptScope
+	_, found := nilScope.FailureDiagnostic(ProxyLease{ProxyURL: "http://proxy.example:8080"})
+	require.False(t, found)
+
+	scope := ProxyLeaseAttemptScope{}
+	lease := ProxyLease{
+		ProviderName: "provider",
+		UserName:     "user",
+		ProxyURL:     "http://proxy.example:8080",
+	}
+	diagnostic := classifyProxyFailureDiagnostic(http.StatusServiceUnavailable, "upstream unavailable")
+	scope.ReportFailureWithDiagnostic(lease, diagnostic)
+
+	recordedDiagnostic, found := scope.FailureDiagnostic(lease)
+	require.True(t, found)
+	require.Equal(t, ProxyFailureKindStatus, recordedDiagnostic.Kind)
+	require.Equal(t, http.StatusServiceUnavailable, recordedDiagnostic.StatusCode)
+}
+
+func TestProxyLeaseSelectorDiagnosticCoverageBranches(t *testing.T) {
+	currentTime := time.Unix(0, 0)
+	selector, err := NewProxyLeaseSelectorWithOptions(
+		[]ProxyRotationProviderConfig{
+			{
+				Name: "provider-one",
+				Users: []ProxyRotationUserConfig{{
+					Name: "user-one",
+					URL:  "http://proxy-one:8080",
+				}},
+			},
+			{
+				Name: "provider-two",
+				Users: []ProxyRotationUserConfig{{
+					Name: "user-one",
+					URL:  "http://proxy-two:8080",
+				}},
+			},
+		},
+		ProxyLeaseSelectorCircuitBreaker(true),
+		ProxyLeaseSelectorClock(func() time.Time { return currentTime }),
+	)
+	require.NoError(t, err)
+
+	selector.failureDiagnostics = nil
+	firstLease, err := selector.AcquireRequired()
+	require.NoError(t, err)
+	selector.ReportFailureWithDiagnostic(firstLease, classifyProxyFailureDiagnostic(http.StatusServiceUnavailable, "unavailable"))
+	require.NotNil(t, selector.failureDiagnostics)
+
+	secondLease, err := selector.AcquireRequired()
+	require.NoError(t, err)
+	selector.ReportCriticalFailure(secondLease)
+
+	selector.ReportCriticalFailure(firstLease)
+	_, err = selector.AcquireRequired()
+	require.ErrorIs(t, err, ErrProxyLeaseCandidatesExhausted)
+	require.ErrorContains(t, err, "status_503=1")
+	require.ErrorContains(t, err, "unknown=1")
+
+	selector, err = NewProxyLeaseSelectorWithOptions(
+		[]ProxyRotationProviderConfig{
+			{
+				Name: "provider-one",
+				Users: []ProxyRotationUserConfig{{
+					Name: "user-one",
+					URL:  "http://available-proxy:8080",
+				}},
+			},
+			{
+				Name: "provider-two",
+				Users: []ProxyRotationUserConfig{{
+					Name: "user-one",
+					URL:  "http://unavailable-proxy:8080",
+				}},
+			},
+		},
+		ProxyLeaseSelectorCircuitBreaker(true),
+		ProxyLeaseSelectorClock(func() time.Time { return currentTime }),
+	)
+	require.NoError(t, err)
+	availableLease, err := selector.AcquireRequired()
+	require.NoError(t, err)
+	unavailableLease, err := selector.AcquireRequired()
+	require.NoError(t, err)
+	selector.ReportCriticalFailure(unavailableLease)
+	selector.Release(availableLease)
+	selector.mu.Lock()
+	diagnostics := selector.unavailableDiagnosticsLocked()
+	selector.mu.Unlock()
+	require.Len(t, diagnostics, 1)
+	require.Equal(t, ProxyFailureKindUnknown, diagnostics[0].Kind)
+}
+
+func TestResponseProxyDiagnosticCoverageBranches(t *testing.T) {
+	retryTracker := &retryOnlyProxyHealth{}
+	processor := &responseProcessor{proxyTracker: retryTracker}
+	response := newTestResponse("PROD")
+	lease := ProxyLease{
+		ProviderName: "provider",
+		UserName:     "user",
+		ProxyURL:     "http://proxy.example:8080",
+	}
+	response.Request.ProxyURL = lease.ProxyURL
+	attachTrackedProxySelection(response.Request, lease)
+
+	require.True(t, processor.reportProxyRetry(response, lease.ProxyURL))
+	require.Equal(t, []ProxyLease{lease}, retryTracker.retryLeases)
+
+	responseWithoutSelection := newTestResponse("PROD")
+	responseWithoutSelection.Request.ProxyURL = lease.ProxyURL
+	require.False(t, processor.reportProxyRetryWithDiagnostic(responseWithoutSelection, lease.ProxyURL, classifyProxyFailureDiagnostic(http.StatusOK, "CAPTCHA")))
+
+	plainTracker := &trackingProxyHealth{}
+	processor = &responseProcessor{proxyTracker: plainTracker}
+	require.False(t, processor.reportProxyRetryWithDiagnostic(response, lease.ProxyURL, classifyProxyFailureDiagnostic(http.StatusOK, "CAPTCHA")))
+	processor.recordContentProxyRetry(response, classifyProxyFailureDiagnostic(http.StatusOK, "CAPTCHA"))
+	require.Empty(t, plainTracker.failures)
+	require.Empty(t, plainTracker.criticalFailures)
+
+	processor = &responseProcessor{}
+	processor.recordContentProxyRetry(response, classifyProxyFailureDiagnostic(http.StatusOK, "CAPTCHA"))
+
+	tracker := &recordingLeaseTracker{}
+	processor = &responseProcessor{proxyTracker: tracker}
+	processor.recordContentProxyRetry(response, classifyProxyFailureDiagnostic(http.StatusOK, "CAPTCHA"))
+	require.Equal(t, []ProxyLease{lease}, tracker.releases)
+
+	responseWithoutProxy := newTestResponse("PROD")
+	responseWithoutProxy.Request.ProxyURL = ""
+	processor.recordContentProxyRetry(responseWithoutProxy, classifyProxyFailureDiagnostic(http.StatusOK, "CAPTCHA"))
+
+	selector, err := NewProxyLeaseSelector([]ProxyRotationProviderConfig{{
+		Name: "provider-one",
+		Users: []ProxyRotationUserConfig{{
+			Name: "user-one",
+			URL:  "http://known-proxy.example:8080",
+		}},
+	}})
+	require.NoError(t, err)
+	processor = &responseProcessor{proxyTracker: selector}
+	require.False(t, processor.reportProxyRetryWithDiagnostic(responseWithoutSelection, "http://unknown-proxy.example:8080", classifyProxyFailureDiagnostic(http.StatusOK, "CAPTCHA")))
+}
+
+func TestCriticalProxyDiagnosticReporterCoverageBranches(t *testing.T) {
+	selector, err := NewProxyLeaseSelectorWithOptions(
+		[]ProxyRotationProviderConfig{{
+			Name: "provider-one",
+			Users: []ProxyRotationUserConfig{{
+				Name: "user-one",
+				URL:  "http://proxy-one:8080",
+			}},
+		}},
+		ProxyLeaseSelectorCircuitBreaker(true),
+		ProxyLeaseSelectorClock(func() time.Time { return time.Unix(0, 0) }),
+	)
+	require.NoError(t, err)
+	lease, err := selector.AcquireRequired()
+	require.NoError(t, err)
+
+	response := newTestResponse("PROD")
+	response.Request.ProxyURL = lease.ProxyURL
+	attachTrackedProxySelection(response.Request, lease)
+
+	processor := &responseProcessor{proxyTracker: selector}
+	processor.recordCriticalProxyFailureWithDiagnostic(response, classifyProxyFailureDiagnostic(http.StatusGatewayTimeout, "timeout"))
+
+	_, err = selector.AcquireRequired()
+	require.ErrorIs(t, err, ErrProxyLeaseCandidatesExhausted)
+	require.ErrorContains(t, err, "status_504=1")
+
+	secondSelector, err := NewProxyLeaseSelector([]ProxyRotationProviderConfig{{
+		Name: "provider-one",
+		Users: []ProxyRotationUserConfig{{
+			Name: "user-one",
+			URL:  "http://proxy-two:8080",
+		}},
+	}})
+	require.NoError(t, err)
+	secondLease, err := secondSelector.AcquireRequired()
+	require.NoError(t, err)
+	tracker := &recordingLeaseTracker{selector: secondSelector}
+	response = newTestResponse("PROD")
+	response.Request.ProxyURL = secondLease.ProxyURL
+	attachTrackedProxySelection(response.Request, secondLease)
+
+	processor = &responseProcessor{proxyTracker: tracker}
+	processor.recordCriticalProxyFailureWithDiagnostic(response, classifyProxyFailureDiagnostic(http.StatusGatewayTimeout, "timeout"))
+	require.Equal(t, []ProxyLease{secondLease}, tracker.criticalFailures)
+}
+
+func TestRecordProxyFailureWithErrorRecordsDiagnostics(t *testing.T) {
+	selector, err := NewProxyLeaseSelectorWithOptions(
+		[]ProxyRotationProviderConfig{{
+			Name: "provider-one",
+			Users: []ProxyRotationUserConfig{{
+				Name: "user-one",
+				URL:  "http://proxy-one:8080",
+			}},
+		}},
+		ProxyLeaseSelectorCircuitBreaker(true),
+		ProxyLeaseSelectorClock(func() time.Time { return time.Unix(0, 0) }),
+	)
+	require.NoError(t, err)
+	lease, err := selector.AcquireRequired()
+	require.NoError(t, err)
+	response := &colly.Response{
+		StatusCode: http.StatusBadGateway,
+		Request: &colly.Request{
+			ProxyURL: lease.ProxyURL,
+			Ctx:      colly.NewContext(),
+		},
+	}
+	attachTrackedProxySelection(response.Request, lease)
+
+	recordProxyFailureWithError(selector, response, errors.New("bad gateway"))
+
+	_, err = selector.AcquireRequired()
+	require.NoError(t, err)
+
+	secondSelector, err := NewProxyLeaseSelector([]ProxyRotationProviderConfig{{
+		Name: "provider-one",
+		Users: []ProxyRotationUserConfig{{
+			Name: "user-one",
+			URL:  "http://proxy-two:8080",
+		}},
+	}})
+	require.NoError(t, err)
+	secondLease, err := secondSelector.AcquireRequired()
+	require.NoError(t, err)
+	tracker := &recordingLeaseTracker{selector: secondSelector}
+	response = &colly.Response{
+		StatusCode: 0,
+		Request: &colly.Request{
+			ProxyURL: secondLease.ProxyURL,
+			Ctx:      colly.NewContext(),
+		},
+	}
+	attachTrackedProxySelection(response.Request, secondLease)
+
+	recordProxyFailureWithError(tracker, response, errors.New("connection reset"))
+	require.Equal(t, []ProxyLease{secondLease}, tracker.failures)
+}
+
+func TestRecordProxyFailureCredentialCoverageBranches(t *testing.T) {
+	tracker := &trackingProxyHealth{}
+	response := &colly.Response{
+		StatusCode: http.StatusProxyAuthRequired,
+		Request: &colly.Request{
+			ProxyURL: "",
+			Ctx:      colly.NewContext(),
+		},
+	}
+	recordProxyFailureWithDiagnostic(tracker, response, classifyProxyFailureDiagnostic(http.StatusProxyAuthRequired, "Proxy Authentication Required"))
+	require.Empty(t, tracker.criticalFailures)
+
+	selector, err := NewProxyLeaseSelector([]ProxyRotationProviderConfig{{
+		Name: "provider-one",
+		Users: []ProxyRotationUserConfig{{
+			Name: "user-one",
+			URL:  "http://proxy-one:8080",
+		}},
+	}})
+	require.NoError(t, err)
+	lease, err := selector.AcquireRequired()
+	require.NoError(t, err)
+	recordingTracker := &recordingLeaseTracker{selector: selector}
+	response = &colly.Response{
+		StatusCode: http.StatusProxyAuthRequired,
+		Request: &colly.Request{
+			ProxyURL: lease.ProxyURL,
+			Ctx:      colly.NewContext(),
+		},
+	}
+	attachTrackedProxySelection(response.Request, lease)
+	recordProxyFailureWithDiagnostic(recordingTracker, response, classifyProxyFailureDiagnostic(http.StatusProxyAuthRequired, "Proxy Authentication Required"))
+	require.Equal(t, []ProxyLease{lease}, recordingTracker.criticalFailures)
+
+	response = &colly.Response{
+		StatusCode: http.StatusPaymentRequired,
+		Request: &colly.Request{
+			ProxyURL: "http://proxy-two:8080",
+			Ctx:      colly.NewContext(),
+		},
+	}
+	recordProxyFailureWithDiagnostic(tracker, response, classifyProxyFailureDiagnostic(http.StatusPaymentRequired, "Payment Required"))
+	require.Equal(t, []string{"http://proxy-two:8080"}, tracker.criticalFailures)
+}
+
+func TestRetryProviderCredentialProxyErrorCoverageBranches(t *testing.T) {
+	retryHandler := &stubRetryHandler{result: true}
+	require.False(t, retryProviderCredentialProxyError(nil, retryHandler, nil))
+
+	response := newTestResponse("PROD")
+	response.Request.URL = mustParseCrawlerTestURL(t, "https://example.com/dp/PROD")
+	require.False(t, retryProviderCredentialProxyError(response, nil, nil))
+	require.False(t, retryProviderCredentialProxyError(response, retryHandler, &trackingProxyHealth{}))
+
+	selector, err := NewProxyLeaseSelector([]ProxyRotationProviderConfig{{
+		Name: "provider-one",
+		Users: []ProxyRotationUserConfig{{
+			Name: "user-one",
+			URL:  "http://proxy-one:8080",
+		}},
+	}})
+	require.NoError(t, err)
+	require.False(t, retryProviderCredentialProxyError(response, retryHandler, selector))
+}
+
+type retryLookupProxyHealth struct {
+	retryOnlyProxyHealth
+	selection ProxySelection
+}
+
+func (tracker *retryLookupProxyHealth) SelectionForProxyURL(proxyURL string) (ProxySelection, bool) {
+	if proxyURL != tracker.selection.ProxyURL {
+		return ProxySelection{}, false
+	}
+	return tracker.selection, true
+}
+
+func TestReportProxyRetryWithDiagnosticLookupBranch(t *testing.T) {
+	selector, err := NewProxyLeaseSelector([]ProxyRotationProviderConfig{{
+		Name: "provider-one",
+		Users: []ProxyRotationUserConfig{
+			{Name: "user-one", URL: "http://proxy-one:8080"},
+			{Name: "user-two", URL: "http://proxy-two:8080"},
+		},
+	}})
+	require.NoError(t, err)
+	lease, err := selector.AcquireRequired()
+	require.NoError(t, err)
+
+	response := newTestResponse("PROD")
+	response.Request.ProxyURL = lease.ProxyURL
+	processor := &responseProcessor{proxyTracker: selector}
+	require.True(t, processor.reportProxyRetryWithDiagnostic(response, lease.ProxyURL, classifyProxyFailureDiagnostic(http.StatusOK, "CAPTCHA")))
+
+	nextLease, err := selector.AcquireRequired()
+	require.NoError(t, err)
+	require.Equal(t, "http://proxy-two:8080", nextLease.ProxyURL)
+
+	retryLookupTracker := &retryLookupProxyHealth{selection: lease}
+	processor = &responseProcessor{proxyTracker: retryLookupTracker}
+	require.True(t, processor.reportProxyRetryWithDiagnostic(response, lease.ProxyURL, classifyProxyFailureDiagnostic(http.StatusOK, "CAPTCHA")))
+	require.Equal(t, []ProxyLease{lease}, retryLookupTracker.retryLeases)
+}
+
 // ─── NewService with proxies and circuit breaker ──────────────────────────
 
 func TestNewServiceWithMultipleProxiesAndCircuitBreaker(t *testing.T) {

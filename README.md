@@ -15,7 +15,8 @@ projects.
 - **RenderPage / RenderPages** - One-shot convenience helpers for JS-rendered
   pages.
 - **NewHTTPClient** - Build an HTTP client bound to the same transport profile
-  model.
+  model; direct profiles bypass ambient `HTTP_PROXY`/`HTTPS_PROXY` environment
+  settings while explicit HTTP and SOCKS profiles stay profile-bound.
 
 ## Crawler
 Reusable crawler primitives for proxy-aware scraping workloads.
@@ -29,6 +30,14 @@ Reusable crawler primitives for proxy-aware scraping workloads.
 - **RetryDecision.ProxyFailureSeverity** - Let platform hooks distinguish normal
   rotate-proxy retries that only rotate leases from critical proxy failures that
   should immediately cooldown a candidate.
+- **RetryDecision.ProxyFailureKind** - Attach structured proxy diagnostics such
+  as challenge, status, transport, provider auth, and provider account reasons
+  so shared selector pools can rotate content challenges without poisoning proxy
+  health and can explain exhausted candidate pools.
+- **Provider credential failures** - Status 402, status 407, `Payment Required`,
+  and `Proxy Authentication Required` errors quarantine the affected lease and
+  retry only alternate proxy candidates instead of burning the normal retry
+  budget.
 - **ProxyLeaseAttemptScope** - Track failed leases for one scrape or request
   batch so callers can skip candidates that already failed during that
   operation and stop with a typed exhausted-candidates error.
