@@ -11,7 +11,10 @@ only the helpers they need.
   forwarding, and one-shot render helpers.
 - `configfile`: Strict YAML config loading with scalar-only environment
   interpolation, explicit missing-variable errors, no default-substitution
-  syntax, single-document stream validation, and known-field decoding.
+  syntax, single-document stream validation, known-field decoding, and
+  registry-backed required/optional environment validation with optional value
+  schemas. `cmd/configenvcheck` exposes the same contract to deployment
+  preflights without requiring each caller to write a Go adapter first.
 - `crawler`: Shared crawling helpers, including provider/user-aware proxy lease
   selection and operation-scoped failed-lease tracking for scrape batches.
 - `file`: Filesystem helpers (delete, close, read/write convenience).
