@@ -87,6 +87,13 @@ func (missingVariablesError MissingEnvironmentVariablesError) Is(target error) b
 // LoadYAML reads a YAML config file, expands environment variables only inside
 // YAML scalar nodes, and decodes the result with KnownFields enabled.
 func LoadYAML(path string, target any) error {
+	return LoadYAMLWithOptions(path, target, EnvironmentOptions{})
+}
+
+// LoadYAMLWithOptions reads a YAML config file, validates the supplied
+// environment registry, expands environment variables only inside YAML scalar
+// nodes, and decodes the result with KnownFields enabled.
+func LoadYAMLWithOptions(path string, target any, options EnvironmentOptions) error {
 	normalizedPath := strings.TrimSpace(path)
 	if normalizedPath == "" {
 		return fmt.Errorf("%w: config path is required", ErrMissingPath)
@@ -97,7 +104,7 @@ func LoadYAML(path string, target any) error {
 		return fmt.Errorf("%w: path=%s: %w", ErrRead, normalizedPath, readError)
 	}
 
-	if loadError := LoadYAMLBytes(configPayload, target); loadError != nil {
+	if loadError := LoadYAMLBytesWithOptions(configPayload, target, options); loadError != nil {
 		return fmt.Errorf("configfile.load path=%s: %w", normalizedPath, loadError)
 	}
 	return nil
@@ -106,11 +113,18 @@ func LoadYAML(path string, target any) error {
 // LoadYAMLBytes expands environment variables only inside YAML scalar nodes and
 // decodes the result with KnownFields enabled.
 func LoadYAMLBytes(configPayload []byte, target any) error {
+	return LoadYAMLBytesWithOptions(configPayload, target, EnvironmentOptions{})
+}
+
+// LoadYAMLBytesWithOptions validates the supplied environment registry, expands
+// environment variables only inside YAML scalar nodes, and decodes the result
+// with KnownFields enabled.
+func LoadYAMLBytesWithOptions(configPayload []byte, target any, options EnvironmentOptions) error {
 	if targetError := validateDecodeTarget(target); targetError != nil {
 		return targetError
 	}
 
-	interpolatedConfigPayload, interpolationError := InterpolateYAML(configPayload)
+	interpolatedConfigPayload, interpolationError := InterpolateYAMLWithOptions(configPayload, options)
 	if interpolationError != nil {
 		return interpolationError
 	}
@@ -129,13 +143,24 @@ func LoadYAMLBytes(configPayload []byte, target any) error {
 
 // InterpolateYAML expands environment variables only inside YAML scalar nodes.
 func InterpolateYAML(configPayload []byte) ([]byte, error) {
+	return InterpolateYAMLWithOptions(configPayload, EnvironmentOptions{})
+}
+
+// InterpolateYAMLWithOptions validates the supplied environment registry and
+// expands environment variables only inside YAML scalar nodes.
+func InterpolateYAMLWithOptions(configPayload []byte, options EnvironmentOptions) ([]byte, error) {
+	lookup := normalizeEnvironmentLookup(options.Lookup)
+	if validationError := options.Registry.Validate(lookup); validationError != nil {
+		return nil, validationError
+	}
+
 	rootNode, decodeError := decodeSingleYAMLDocument(configPayload)
 	if decodeError != nil {
 		return nil, decodeError
 	}
 
 	missingVariableSet := make(map[string]struct{})
-	if interpolationError := interpolateNode(&rootNode, missingVariableSet); interpolationError != nil {
+	if interpolationError := interpolateNode(&rootNode, missingVariableSet, lookup, options.Registry); interpolationError != nil {
 		return nil, interpolationError
 	}
 	if len(missingVariableSet) > 0 {
@@ -187,35 +212,35 @@ func validateDecodeTarget(target any) error {
 	return nil
 }
 
-func interpolateNode(node *yaml.Node, missingVariableSet map[string]struct{}) error {
+func interpolateNode(node *yaml.Node, missingVariableSet map[string]struct{}, lookup EnvironmentLookup, registry EnvRegistry) error {
 	if node == nil {
 		return nil
 	}
 	if node.Kind == yaml.ScalarNode {
-		if interpolationError := interpolateScalarNode(node, missingVariableSet); interpolationError != nil {
+		if interpolationError := interpolateScalarNode(node, missingVariableSet, lookup, registry); interpolationError != nil {
 			return interpolationError
 		}
 	}
 	for _, childNode := range node.Content {
-		if interpolationError := interpolateNode(childNode, missingVariableSet); interpolationError != nil {
+		if interpolationError := interpolateNode(childNode, missingVariableSet, lookup, registry); interpolationError != nil {
 			return interpolationError
 		}
 	}
 	return nil
 }
 
-func interpolateScalarNode(node *yaml.Node, missingVariableSet map[string]struct{}) error {
+func interpolateScalarNode(node *yaml.Node, missingVariableSet map[string]struct{}, lookup EnvironmentLookup, registry EnvRegistry) error {
 	if node == nil || node.Kind != yaml.ScalarNode || !strings.Contains(node.Value, "$") {
 		return nil
 	}
 
-	expandedWholeValue, isWholeReference := expandWholeEnvironmentReference(node.Value, missingVariableSet)
+	expandedWholeValue, isWholeReference := expandWholeEnvironmentReference(node.Value, missingVariableSet, lookup, registry)
 	if isWholeReference {
 		applyInterpolatedScalarTag(node, expandedWholeValue)
 		return nil
 	}
 
-	expandedValue, changed, interpolationError := expandInlineEnvironmentReferences(node.Value, missingVariableSet)
+	expandedValue, changed, interpolationError := expandInlineEnvironmentReferences(node.Value, missingVariableSet, lookup, registry)
 	if interpolationError != nil {
 		return interpolationError
 	}
@@ -227,7 +252,7 @@ func interpolateScalarNode(node *yaml.Node, missingVariableSet map[string]struct
 	return nil
 }
 
-func expandWholeEnvironmentReference(value string, missingVariableSet map[string]struct{}) (string, bool) {
+func expandWholeEnvironmentReference(value string, missingVariableSet map[string]struct{}, lookup EnvironmentLookup, registry EnvRegistry) (string, bool) {
 	trimmedValue := strings.TrimSpace(value)
 	submatches := wholeEnvironmentReferencePattern.FindStringSubmatch(trimmedValue)
 	if len(submatches) == 0 {
@@ -238,14 +263,16 @@ func expandWholeEnvironmentReference(value string, missingVariableSet map[string
 	if environmentName == "" {
 		environmentName = submatches[2]
 	}
-	environmentValue, environmentFound := os.LookupEnv(environmentName)
+	environmentValue, environmentFound := lookup(environmentName)
 	if !environmentFound {
-		missingVariableSet[environmentName] = struct{}{}
+		if !registry.optional(environmentName) {
+			missingVariableSet[environmentName] = struct{}{}
+		}
 	}
 	return environmentValue, true
 }
 
-func expandInlineEnvironmentReferences(value string, missingVariableSet map[string]struct{}) (string, bool, error) {
+func expandInlineEnvironmentReferences(value string, missingVariableSet map[string]struct{}, lookup EnvironmentLookup, registry EnvRegistry) (string, bool, error) {
 	changed := false
 	var invalidReferenceError error
 	expandedValue := environmentReferencePattern.ReplaceAllStringFunc(value, func(reference string) string {
@@ -258,9 +285,11 @@ func expandInlineEnvironmentReferences(value string, missingVariableSet map[stri
 			return reference
 		}
 		changed = true
-		environmentValue, environmentFound := os.LookupEnv(environmentName)
+		environmentValue, environmentFound := lookup(environmentName)
 		if !environmentFound {
-			missingVariableSet[environmentName] = struct{}{}
+			if !registry.optional(environmentName) {
+				missingVariableSet[environmentName] = struct{}{}
+			}
 		}
 		return environmentValue
 	})
