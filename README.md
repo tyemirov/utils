@@ -49,10 +49,19 @@ Strict YAML configuration loading for applications.
   environment variables only inside YAML scalar values, reject missing
   environment variables and trailing YAML documents, and decode with known-field
   validation.
+- **LoadYAMLWithOptions(path string, target any, options EnvironmentOptions) error** -
+  Load a YAML config with an explicit environment registry so deployment
+  preflights can require critical shell-sourced values before decoding.
 - **LoadYAMLBytes(configPayload []byte, target any) error** - Apply the same
   contract to already-read YAML bytes.
 - **InterpolateYAML(configPayload []byte) ([]byte, error)** - Expand YAML scalar
   environment references before application-specific decoding.
+- **EnvContract / EnvRegistry** - Declare required and optional environment
+  parameters, attach value schemas when needed, expose the mandatory registry,
+  and validate shell-expanded config references without logging secret values.
+- **cmd/configenvcheck** - Validate a YAML config plus dotenv inputs from
+  deployment preflights, including optional variables and built-in value schemas
+  for booleans, URLs, JSON, and base64-encoded 32-byte keys.
 
 ## JSEval
 Compatibility wrapper around `browsertransport` for existing callers that only
