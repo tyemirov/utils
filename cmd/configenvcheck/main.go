@@ -4,13 +4,10 @@ package main
 
 import (
 	"bufio"
-	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
-	"net/url"
 	"os"
 	"sort"
 	"strings"
@@ -28,17 +25,22 @@ const (
 	flagRequiredEnv                = "required-env"
 	flagSchema                     = "schema"
 	flagShowRegistry               = "show-registry"
-	schemaBase64Bytes32            = "base64-32-byte"
-	schemaBool                     = "bool"
-	schemaJSON                     = "json"
-	schemaURL                      = "url"
 	messageConfigDescription       = "YAML config file whose environment references must be validated"
 	messageEnvFileDescription      = "dotenv file that supplies environment values; repeatable"
 	messageInheritShellDescription = "Supplement dotenv values with process environment values"
 	messageOptionalDescription     = "Environment variable that may be omitted or empty; repeatable"
 	messageRequiredDescription     = "Additional required environment variable; repeatable"
-	messageSchemaDescription       = "Environment value schema as NAME=bool|url|json|base64-32-byte; repeatable"
+	messageSchemaDescription       = "Environment value schema as NAME=bool|url|json|base64-32-byte|hex-32-byte|hostport|duration|positive-int|email; repeatable"
 	messageRegistryDescription     = "Print the mandatory environment registry on success"
+	schemaBase64Bytes32            = configfile.EnvSchemaBase64Bytes32
+	schemaBool                     = configfile.EnvSchemaBool
+	schemaDuration                 = configfile.EnvSchemaDuration
+	schemaEmail                    = configfile.EnvSchemaEmail
+	schemaHexBytes32               = configfile.EnvSchemaHexBytes32
+	schemaHostPort                 = configfile.EnvSchemaHostPort
+	schemaJSON                     = configfile.EnvSchemaJSON
+	schemaPositiveInteger          = configfile.EnvSchemaPositiveInteger
+	schemaURL                      = configfile.EnvSchemaURL
 )
 
 var errInvalidArguments = errors.New("configenvcheck.invalid_arguments")
@@ -217,50 +219,11 @@ func splitSchemaDeclaration(declaration string) (string, string, error) {
 }
 
 func schemaForKind(schemaKind string) (configfile.EnvValueSchema, error) {
-	switch strings.ToLower(strings.TrimSpace(schemaKind)) {
-	case schemaBool:
-		return configfile.NewEnvValueSchema(schemaBool, validateBool)
-	case schemaURL:
-		return configfile.NewEnvValueSchema(schemaURL, validateURL)
-	case schemaJSON:
-		return configfile.NewEnvValueSchema(schemaJSON, validateJSON)
-	case schemaBase64Bytes32:
-		return configfile.NewEnvValueSchema(schemaBase64Bytes32, validateBase64Bytes32)
-	default:
+	schema, schemaErr := configfile.EnvValueSchemaForKind(schemaKind)
+	if schemaErr != nil {
 		return nil, fmt.Errorf("%w: unsupported schema %q", errInvalidArguments, schemaKind)
 	}
-}
-
-func validateBool(value string) error {
-	normalizedValue := strings.ToLower(strings.TrimSpace(value))
-	if normalizedValue == "true" || normalizedValue == "false" {
-		return nil
-	}
-	return errors.New("expected boolean")
-}
-
-func validateURL(value string) error {
-	parsedURL, parseErr := url.Parse(strings.TrimSpace(value))
-	if parseErr != nil || parsedURL.Scheme == "" || parsedURL.Host == "" {
-		return errors.New("expected absolute URL")
-	}
-	return nil
-}
-
-func validateJSON(value string) error {
-	var decoded any
-	if unmarshalErr := json.Unmarshal([]byte(value), &decoded); unmarshalErr != nil {
-		return errors.New("expected JSON")
-	}
-	return nil
-}
-
-func validateBase64Bytes32(value string) error {
-	decodedValue, decodeErr := base64.StdEncoding.DecodeString(strings.TrimSpace(value))
-	if decodeErr != nil || len(decodedValue) != 32 {
-		return errors.New("expected base64-encoded 32-byte value")
-	}
-	return nil
+	return schema, nil
 }
 
 func loadEnvironment(inputs checkInputs) (map[string]string, error) {

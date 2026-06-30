@@ -114,6 +114,23 @@ CONFIGENVCHECK_TEST_BOOL=definitely-not-a-bool
 	}
 }
 
+func TestRunReportsMissingEnvironmentInMappingKey(testingHandle *testing.T) {
+	configPath := writeConfigenvcheckFile(testingHandle, "config.yml", `
+"${CONFIGENVCHECK_TEST_MISSING}": value
+`)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := run([]string{"--config", configPath}, &stdout, &stderr)
+	if exitCode != 1 {
+		testingHandle.Fatalf("expected check failure, exit=%d stdout=%q stderr=%q", exitCode, stdout.String(), stderr.String())
+	}
+	expectedError := "ERROR: CONFIGENVCHECK_TEST_MISSING missing references=${CONFIGENVCHECK_TEST_MISSING}"
+	if !strings.Contains(stderr.String(), expectedError) {
+		testingHandle.Fatalf("expected stderr to contain %q, got %q", expectedError, stderr.String())
+	}
+}
+
 func TestRunRejectsInvalidArguments(testingHandle *testing.T) {
 	testCases := []struct {
 		name      string
@@ -230,6 +247,11 @@ func TestSchemaValidators(testingHandle *testing.T) {
 		{name: "url", schemaKind: schemaURL, validValue: "https://example.invalid/path", invalidValue: "/relative"},
 		{name: "json", schemaKind: schemaJSON, validValue: `["admin@example.invalid"]`, invalidValue: "["},
 		{name: "base64", schemaKind: schemaBase64Bytes32, validValue: testBase64Key(), invalidValue: base64.StdEncoding.EncodeToString([]byte("short"))},
+		{name: "hex", schemaKind: schemaHexBytes32, validValue: strings.Repeat("a", 64), invalidValue: "abc"},
+		{name: "hostport", schemaKind: schemaHostPort, validValue: "localhost:50051", invalidValue: "localhost"},
+		{name: "duration", schemaKind: schemaDuration, validValue: "30m", invalidValue: "0s"},
+		{name: "positive integer", schemaKind: schemaPositiveInteger, validValue: "1", invalidValue: "-1"},
+		{name: "email", schemaKind: schemaEmail, validValue: "admin@example.invalid", invalidValue: "admin"},
 	}
 	for _, validator := range validators {
 		testingHandle.Run(validator.name, func(testingHandle *testing.T) {
