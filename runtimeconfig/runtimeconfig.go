@@ -1,5 +1,5 @@
 // Package runtimeconfig loads strict YAML runtime configuration through one
-// environment-expansion boundary.
+// interpolation boundary.
 package runtimeconfig
 
 import (
@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"sort"
 	"strings"
 
 	"github.com/tyemirov/utils/configfile"
@@ -32,12 +31,12 @@ var (
 	ErrParse = errors.New("runtimeconfig.parse")
 	// ErrRead reports config file read failures.
 	ErrRead = errors.New("runtimeconfig.read")
-	// ErrUndeclaredEnvironmentReference reports YAML references not declared by
-	// the runtime environment contract.
-	ErrUndeclaredEnvironmentReference = errors.New("runtimeconfig.undeclared_environment_reference")
 	// ErrValidation reports application validation failures after strict decode.
 	ErrValidation = errors.New("runtimeconfig.validation")
 )
+
+// ExpansionLookup resolves one YAML interpolation reference.
+type ExpansionLookup func(name string) (string, bool)
 
 // ValueMapping maps a scalar YAML path into the effective config value map.
 type ValueMapping struct {
@@ -45,11 +44,10 @@ type ValueMapping struct {
 	Path []string
 }
 
-// Options configures a typed runtime config loader.
-type Options[Config any] struct {
+// Contract declares a typed runtime config shape and loading behavior.
+type Contract[Config any] struct {
 	DefaultConfigPath string
-	Lookup            configfile.EnvironmentLookup
-	Contract          configfile.EnvContract
+	ExpansionLookup   ExpansionLookup
 	ValueMappings     []ValueMapping
 	Validate          func(Config) error
 }
@@ -57,8 +55,7 @@ type Options[Config any] struct {
 // Loader loads typed runtime config values.
 type Loader[Config any] struct {
 	defaultConfigPath string
-	lookup            configfile.EnvironmentLookup
-	contract          configfile.EnvContract
+	expansionLookup   ExpansionLookup
 	valueMappings     []ValueMapping
 	validate          func(Config) error
 }
@@ -69,7 +66,6 @@ type Loaded[Config any] struct {
 	Config        Config
 	Settings      map[string]any
 	Values        ConfigValues
-	Registry      configfile.EnvRegistry
 	EffectiveYAML []byte
 }
 
@@ -79,14 +75,14 @@ type ConfigValues struct {
 }
 
 // NewLoader creates a typed runtime config loader.
-func NewLoader[Config any](options Options[Config]) (Loader[Config], error) {
-	defaultConfigPath := strings.TrimSpace(options.DefaultConfigPath)
+func NewLoader[Config any](contract Contract[Config]) (Loader[Config], error) {
+	defaultConfigPath := strings.TrimSpace(contract.DefaultConfigPath)
 	if defaultConfigPath == "" {
 		defaultConfigPath = DefaultConfigPath
 	}
-	valueMappings := make([]ValueMapping, 0, len(options.ValueMappings))
-	seenKeys := make(map[string]struct{}, len(options.ValueMappings))
-	for _, mapping := range options.ValueMappings {
+	valueMappings := make([]ValueMapping, 0, len(contract.ValueMappings))
+	seenKeys := make(map[string]struct{}, len(contract.ValueMappings))
+	for _, mapping := range contract.ValueMappings {
 		normalizedKey := strings.TrimSpace(mapping.Key)
 		if normalizedKey == "" {
 			return Loader[Config]{}, fmt.Errorf("%w: value mapping key is required", ErrInvalidOptions)
@@ -105,10 +101,9 @@ func NewLoader[Config any](options Options[Config]) (Loader[Config], error) {
 	}
 	return Loader[Config]{
 		defaultConfigPath: defaultConfigPath,
-		lookup:            options.Lookup,
-		contract:          options.Contract,
+		expansionLookup:   contract.ExpansionLookup,
 		valueMappings:     valueMappings,
-		validate:          options.Validate,
+		validate:          contract.Validate,
 	}, nil
 }
 
@@ -169,18 +164,11 @@ func (loader Loader[Config]) LoadSection(configPath string, sectionPath []string
 }
 
 func (loader Loader[Config]) loadPayload(resolvedPath string, configPayload []byte) (Loaded[Config], error) {
-	registry, registryError := loader.contract.RegistryForYAML(configPayload)
-	if registryError != nil {
-		return Loaded[Config]{}, fmt.Errorf("%w: registry path=%s: %w", ErrParse, resolvedPath, registryError)
-	}
-	if declarationError := requireDeclaredEnvironmentReferences(loader.contract, registry); declarationError != nil {
-		return Loaded[Config]{}, declarationError
-	}
-	effectiveYAML, interpolationError := configfile.InterpolateYAMLWithOptions(configPayload, configfile.EnvironmentOptions{
-		Lookup:   loader.lookup,
-		Registry: registry,
-	})
+	effectiveYAML, interpolationError := configfile.InterpolateYAMLWithOptions(configPayload, interpolationOptions(loader.expansionLookup))
 	if interpolationError != nil {
+		if errors.Is(interpolationError, configfile.ErrParse) {
+			return Loaded[Config]{}, fmt.Errorf("%w: %w", ErrParse, interpolationError)
+		}
 		return Loaded[Config]{}, interpolationError
 	}
 
@@ -206,7 +194,6 @@ func (loader Loader[Config]) loadPayload(resolvedPath string, configPayload []by
 		Config:        typedConfig,
 		Settings:      settings,
 		Values:        values,
-		Registry:      registry,
 		EffectiveYAML: append([]byte(nil), effectiveYAML...),
 	}, nil
 }
@@ -240,48 +227,6 @@ func (values ConfigValues) Resolver() func(string) string {
 	return values.Resolve
 }
 
-type undeclaredEnvironmentIssue struct {
-	name  string
-	paths []string
-}
-
-type undeclaredEnvironmentError struct {
-	issues []undeclaredEnvironmentIssue
-}
-
-func (undeclaredError undeclaredEnvironmentError) Error() string {
-	parts := make([]string, 0, len(undeclaredError.issues))
-	for _, issue := range undeclaredError.issues {
-		parts = append(parts, fmt.Sprintf("%s references=%s", issue.name, strings.Join(issue.paths, ",")))
-	}
-	return fmt.Sprintf("%s: %s", ErrUndeclaredEnvironmentReference, strings.Join(parts, "; "))
-}
-
-func (undeclaredError undeclaredEnvironmentError) Is(target error) bool {
-	return target == ErrUndeclaredEnvironmentReference
-}
-
-func requireDeclaredEnvironmentReferences(contract configfile.EnvContract, registry configfile.EnvRegistry) error {
-	var issues []undeclaredEnvironmentIssue
-	for _, requirement := range registry.Requirements() {
-		referencePaths := registry.ReferencePaths(requirement.Name())
-		if len(referencePaths) == 0 {
-			continue
-		}
-		if _, declared := contract.Requirement(requirement.Name()); declared {
-			continue
-		}
-		issues = append(issues, undeclaredEnvironmentIssue{name: requirement.Name(), paths: referencePaths})
-	}
-	if len(issues) == 0 {
-		return nil
-	}
-	sort.Slice(issues, func(leftIndex int, rightIndex int) bool {
-		return issues[leftIndex].name < issues[rightIndex].name
-	})
-	return undeclaredEnvironmentError{issues: issues}
-}
-
 func decodeKnownFields(configPayload []byte, target any) error {
 	decoder := yaml.NewDecoder(bytes.NewReader(configPayload))
 	decoder.KnownFields(true)
@@ -289,6 +234,17 @@ func decodeKnownFields(configPayload []byte, target any) error {
 		return fmt.Errorf("%w: %w", ErrParse, decodeError)
 	}
 	return nil
+}
+
+func interpolationOptions(expansionLookup ExpansionLookup) configfile.EnvironmentOptions {
+	if expansionLookup == nil {
+		return configfile.EnvironmentOptions{}
+	}
+	return configfile.EnvironmentOptions{
+		Lookup: func(name string) (string, bool) {
+			return expansionLookup(name)
+		},
+	}
 }
 
 func decodeSettings(configPayload []byte) (map[string]any, error) {
@@ -308,9 +264,9 @@ func sectionPayload(configPayload []byte, sectionPath []string) ([]byte, error) 
 	if len(normalizedSectionPath) == 0 {
 		return nil, fmt.Errorf("%w: section path is required", ErrInvalidOptions)
 	}
-	var rootNode yaml.Node
-	if unmarshalError := yaml.Unmarshal(configPayload, &rootNode); unmarshalError != nil {
-		return nil, fmt.Errorf("%w: %w", ErrParse, unmarshalError)
+	rootNode, parseError := configfile.ParseYAMLDocument(configPayload)
+	if parseError != nil {
+		return nil, fmt.Errorf("%w: %w", ErrParse, parseError)
 	}
 	sectionNode := lookupMappingPath(documentContentNode(&rootNode), normalizedSectionPath)
 	if sectionNode == nil {

@@ -33,7 +33,7 @@ type runtimeSectionFixture struct {
 	Port int `yaml:"port"`
 }
 
-func TestLoaderLoadsTypedConfigSettingsRegistryAndValues(testingHandle *testing.T) {
+func TestLoaderLoadsTypedConfigSettingsAndValues(testingHandle *testing.T) {
 	configPath := writeRuntimeConfigFile(testingHandle, "config.yml", `
 server:
   enabled: ${RUNTIMECONFIG_TEST_ENABLED}
@@ -41,15 +41,8 @@ server:
   port: ${RUNTIMECONFIG_TEST_PORT}
   secret: ${RUNTIMECONFIG_TEST_SECRET}
 `)
-	contract := mustRuntimeConfigContract(testingHandle, []configfile.EnvRequirement{
-		mustRuntimeConfigRequirement(testingHandle, testEnvEnabled, true, configfile.EnvSchemaBool),
-		mustRuntimeConfigRequirement(testingHandle, testEnvHost, true, ""),
-		mustRuntimeConfigRequirement(testingHandle, testEnvPort, true, configfile.EnvSchemaPositiveInteger),
-		mustRuntimeConfigRequirement(testingHandle, testEnvSecret, true, ""),
-	})
-	loader, loaderError := NewLoader[runtimeConfigFixture](Options[runtimeConfigFixture]{
-		Contract: contract,
-		Lookup: mapRuntimeEnvironmentLookup(map[string]string{
+	loader, loaderError := NewLoader[runtimeConfigFixture](Contract[runtimeConfigFixture]{
+		ExpansionLookup: mapRuntimeExpansionLookup(map[string]string{
 			testEnvEnabled: "true",
 			testEnvHost:    "service.example.invalid",
 			testEnvPort:    "8080",
@@ -104,39 +97,34 @@ server:
 	if loaded.Values.Resolver()("BASE_URL") != "https://service.example.invalid/api" {
 		testingHandle.Fatalf("unexpected resolver output")
 	}
-	if paths := loaded.Registry.ReferencePaths(testEnvHost); !reflect.DeepEqual(paths, []string{"server.base_url"}) {
-		testingHandle.Fatalf("unexpected host reference paths: %#v", paths)
-	}
 }
 
-func TestLoaderRejectsUndeclaredEnvironmentReference(testingHandle *testing.T) {
+func TestLoaderRejectsMissingExpansionReference(testingHandle *testing.T) {
 	configPath := writeRuntimeConfigFile(testingHandle, "config.yml", `
 left: ${RUNTIMECONFIG_TEST_SECRET}
 right: ${RUNTIMECONFIG_TEST_HOST}
 `)
-	loader, loaderError := NewLoader[map[string]string](Options[map[string]string]{})
+	loader, loaderError := NewLoader[map[string]string](Contract[map[string]string]{
+		ExpansionLookup: mapRuntimeExpansionLookup(nil),
+	})
 	if loaderError != nil {
 		testingHandle.Fatalf("NewLoader returned error: %v", loaderError)
 	}
 	_, loadError := loader.Load(configPath)
-	if !errors.Is(loadError, ErrUndeclaredEnvironmentReference) {
-		testingHandle.Fatalf("expected undeclared reference error, got %v", loadError)
+	if !errors.Is(loadError, configfile.ErrMissingEnvironmentVariables) {
+		testingHandle.Fatalf("expected missing expansion reference error, got %v", loadError)
 	}
 	if !strings.Contains(loadError.Error(), testEnvSecret) {
-		testingHandle.Fatalf("expected error to include env name, got %v", loadError)
+		testingHandle.Fatalf("expected error to include reference name, got %v", loadError)
 	}
 	if !strings.Contains(loadError.Error(), testEnvHost) {
-		testingHandle.Fatalf("expected error to include second env name, got %v", loadError)
+		testingHandle.Fatalf("expected error to include second reference name, got %v", loadError)
 	}
 }
 
 func TestLoaderRejectsValidationAndNonScalarValueMappings(testingHandle *testing.T) {
-	contract := mustRuntimeConfigContract(testingHandle, []configfile.EnvRequirement{
-		mustRuntimeConfigRequirement(testingHandle, testEnvPort, true, configfile.EnvSchemaPositiveInteger),
-	})
-	loader, loaderError := NewLoader[runtimeConfigFixture](Options[runtimeConfigFixture]{
-		Contract: contract,
-		Lookup:   mapRuntimeEnvironmentLookup(map[string]string{testEnvPort: "80"}),
+	loader, loaderError := NewLoader[runtimeConfigFixture](Contract[runtimeConfigFixture]{
+		ExpansionLookup: mapRuntimeExpansionLookup(map[string]string{testEnvPort: "80"}),
 		ValueMappings: []ValueMapping{
 			{Key: "SERVER", Path: []string{"server"}},
 		},
@@ -159,9 +147,8 @@ server:
 		testingHandle.Fatalf("expected validation error, got %v", loadError)
 	}
 
-	loaderWithoutValidation, loaderError := NewLoader[runtimeConfigFixture](Options[runtimeConfigFixture]{
-		Contract: contract,
-		Lookup:   mapRuntimeEnvironmentLookup(map[string]string{testEnvPort: "8080"}),
+	loaderWithoutValidation, loaderError := NewLoader[runtimeConfigFixture](Contract[runtimeConfigFixture]{
+		ExpansionLookup: mapRuntimeExpansionLookup(map[string]string{testEnvPort: "8080"}),
 		ValueMappings: []ValueMapping{
 			{Key: "SERVER", Path: []string{"server"}},
 		},
@@ -182,12 +169,8 @@ web:
 worker:
   port: ${RUNTIMECONFIG_TEST_PORT}
 `)
-	contract := mustRuntimeConfigContract(testingHandle, []configfile.EnvRequirement{
-		mustRuntimeConfigRequirement(testingHandle, testEnvPort, true, configfile.EnvSchemaPositiveInteger),
-	})
-	loader, loaderError := NewLoader[runtimeSectionFixture](Options[runtimeSectionFixture]{
-		Contract: contract,
-		Lookup:   mapRuntimeEnvironmentLookup(map[string]string{testEnvPort: "9090"}),
+	loader, loaderError := NewLoader[runtimeSectionFixture](Contract[runtimeSectionFixture]{
+		ExpansionLookup: mapRuntimeExpansionLookup(map[string]string{testEnvPort: "9090"}),
 		ValueMappings: []ValueMapping{
 			{Key: "PORT", Path: []string{"port"}},
 		},
@@ -211,16 +194,16 @@ worker:
 
 func TestLoaderRejectsInvalidOptions(testingHandle *testing.T) {
 	testCases := []struct {
-		name    string
-		options Options[map[string]string]
+		name     string
+		contract Contract[map[string]string]
 	}{
-		{name: "blank value key", options: Options[map[string]string]{ValueMappings: []ValueMapping{{Key: " ", Path: []string{"value"}}}}},
-		{name: "missing value path", options: Options[map[string]string]{ValueMappings: []ValueMapping{{Key: "VALUE"}}}},
-		{name: "duplicate value key", options: Options[map[string]string]{ValueMappings: []ValueMapping{{Key: "VALUE", Path: []string{"one"}}, {Key: " VALUE ", Path: []string{"two"}}}}},
+		{name: "blank value key", contract: Contract[map[string]string]{ValueMappings: []ValueMapping{{Key: " ", Path: []string{"value"}}}}},
+		{name: "missing value path", contract: Contract[map[string]string]{ValueMappings: []ValueMapping{{Key: "VALUE"}}}},
+		{name: "duplicate value key", contract: Contract[map[string]string]{ValueMappings: []ValueMapping{{Key: "VALUE", Path: []string{"one"}}, {Key: " VALUE ", Path: []string{"two"}}}}},
 	}
 	for _, testCase := range testCases {
 		testingHandle.Run(testCase.name, func(testingHandle *testing.T) {
-			_, loaderError := NewLoader[map[string]string](testCase.options)
+			_, loaderError := NewLoader[map[string]string](testCase.contract)
 			if !errors.Is(loaderError, ErrInvalidOptions) {
 				testingHandle.Fatalf("expected invalid options error, got %v", loaderError)
 			}
@@ -234,7 +217,7 @@ func TestLoaderResolvesDefaultConfigPath(testingHandle *testing.T) {
 	if writeError := os.WriteFile(defaultPath, []byte("value: ok\n"), 0o600); writeError != nil {
 		testingHandle.Fatalf("write default config: %v", writeError)
 	}
-	loader, loaderError := NewLoader[map[string]string](Options[map[string]string]{
+	loader, loaderError := NewLoader[map[string]string](Contract[map[string]string]{
 		DefaultConfigPath: defaultPath,
 	})
 	if loaderError != nil {
@@ -248,7 +231,7 @@ func TestLoaderResolvesDefaultConfigPath(testingHandle *testing.T) {
 		testingHandle.Fatalf("expected %q, got %q", defaultPath, resolvedPath)
 	}
 
-	missingLoader, loaderError := NewLoader[map[string]string](Options[map[string]string]{
+	missingLoader, loaderError := NewLoader[map[string]string](Contract[map[string]string]{
 		DefaultConfigPath: filepath.Join(tempDir, "missing.yml"),
 	})
 	if loaderError != nil {
@@ -275,7 +258,7 @@ func TestLoaderResolvesDefaultConfigPath(testingHandle *testing.T) {
 		}
 	})
 
-	statErrorLoader, loaderError := NewLoader[map[string]string](Options[map[string]string]{
+	statErrorLoader, loaderError := NewLoader[map[string]string](Contract[map[string]string]{
 		DefaultConfigPath: "bad\x00path",
 	})
 	if loaderError != nil {
@@ -288,7 +271,7 @@ func TestLoaderResolvesDefaultConfigPath(testingHandle *testing.T) {
 }
 
 func TestLoaderReportsReadAndResolveErrors(testingHandle *testing.T) {
-	missingDefaultLoader, loaderError := NewLoader[map[string]string](Options[map[string]string]{
+	missingDefaultLoader, loaderError := NewLoader[map[string]string](Contract[map[string]string]{
 		DefaultConfigPath: filepath.Join(testingHandle.TempDir(), "missing.yml"),
 	})
 	if loaderError != nil {
@@ -310,28 +293,27 @@ func TestLoaderReportsReadAndResolveErrors(testingHandle *testing.T) {
 
 func TestLoaderReportsParseExpansionDecodeAndSettingsErrors(testingHandle *testing.T) {
 	malformedPath := writeRuntimeConfigFile(testingHandle, "malformed.yml", ":\n")
-	loader, loaderError := NewLoader[map[string]string](Options[map[string]string]{})
+	loader, loaderError := NewLoader[map[string]string](Contract[map[string]string]{})
 	if loaderError != nil {
 		testingHandle.Fatalf("NewLoader returned error: %v", loaderError)
 	}
 	if _, loadError := loader.Load(malformedPath); !errors.Is(loadError, ErrParse) {
-		testingHandle.Fatalf("expected registry parse error, got %v", loadError)
+		testingHandle.Fatalf("expected config parse error, got %v", loadError)
 	}
 
 	missingEnvPath := writeRuntimeConfigFile(testingHandle, "missing-env.yml", "value: ${RUNTIMECONFIG_TEST_SECRET}\n")
-	contract := mustRuntimeConfigContract(testingHandle, []configfile.EnvRequirement{
-		mustRuntimeConfigRequirement(testingHandle, testEnvSecret, true, ""),
+	loader, loaderError = NewLoader[map[string]string](Contract[map[string]string]{
+		ExpansionLookup: mapRuntimeExpansionLookup(nil),
 	})
-	loader, loaderError = NewLoader[map[string]string](Options[map[string]string]{Contract: contract})
 	if loaderError != nil {
 		testingHandle.Fatalf("NewLoader returned error: %v", loaderError)
 	}
-	if _, loadError := loader.Load(missingEnvPath); !errors.Is(loadError, configfile.ErrEnvironmentValidation) {
-		testingHandle.Fatalf("expected interpolation validation error, got %v", loadError)
+	if _, loadError := loader.Load(missingEnvPath); !errors.Is(loadError, configfile.ErrMissingEnvironmentVariables) {
+		testingHandle.Fatalf("expected missing expansion reference error, got %v", loadError)
 	}
 
 	unknownFieldPath := writeRuntimeConfigFile(testingHandle, "unknown.yml", "unknown: true\n")
-	typedLoader, loaderError := NewLoader[runtimeConfigFixture](Options[runtimeConfigFixture]{})
+	typedLoader, loaderError := NewLoader[runtimeConfigFixture](Contract[runtimeConfigFixture]{})
 	if loaderError != nil {
 		testingHandle.Fatalf("NewLoader returned error: %v", loaderError)
 	}
@@ -340,7 +322,7 @@ func TestLoaderReportsParseExpansionDecodeAndSettingsErrors(testingHandle *testi
 	}
 
 	scalarPath := writeRuntimeConfigFile(testingHandle, "scalar.yml", "plain\n")
-	scalarLoader, loaderError := NewLoader[string](Options[string]{})
+	scalarLoader, loaderError := NewLoader[string](Contract[string]{})
 	if loaderError != nil {
 		testingHandle.Fatalf("NewLoader returned error: %v", loaderError)
 	}
@@ -351,7 +333,7 @@ func TestLoaderReportsParseExpansionDecodeAndSettingsErrors(testingHandle *testi
 
 func TestLoaderLoadsNullSettingsAsEmptyMap(testingHandle *testing.T) {
 	configPath := writeRuntimeConfigFile(testingHandle, "null.yml", "null\n")
-	loader, loaderError := NewLoader[any](Options[any]{})
+	loader, loaderError := NewLoader[any](Contract[any]{})
 	if loaderError != nil {
 		testingHandle.Fatalf("NewLoader returned error: %v", loaderError)
 	}
@@ -373,12 +355,7 @@ server:
   enabled: true
   empty: null
 `)
-	contract := mustRuntimeConfigContract(testingHandle, []configfile.EnvRequirement{
-		mustRuntimeConfigRequirement(testingHandle, testEnvSecret, true, ""),
-	})
-	loader, loaderError := NewLoader[map[string]any](Options[map[string]any]{
-		Contract: contract,
-		Lookup:   mapRuntimeEnvironmentLookup(map[string]string{testEnvSecret: "declared-but-not-referenced"}),
+	loader, loaderError := NewLoader[map[string]any](Contract[map[string]any]{
 		ValueMappings: []ValueMapping{
 			{Key: "NAME", Path: []string{"server", "name"}},
 			{Key: "COUNT", Path: []string{"server", "count"}},
@@ -410,7 +387,7 @@ server:
 
 func TestLoaderReportsSectionErrors(testingHandle *testing.T) {
 	configPath := writeRuntimeConfigFile(testingHandle, "config.yml", "web:\n  port: 8080\n")
-	loader, loaderError := NewLoader[runtimeSectionFixture](Options[runtimeSectionFixture]{})
+	loader, loaderError := NewLoader[runtimeSectionFixture](Contract[runtimeSectionFixture]{})
 	if loaderError != nil {
 		testingHandle.Fatalf("NewLoader returned error: %v", loaderError)
 	}
@@ -425,17 +402,30 @@ func TestLoaderReportsSectionErrors(testingHandle *testing.T) {
 	if _, loadError := loader.LoadSection(scalarPath, []string{"web"}); !errors.Is(loadError, ErrMissingSection) {
 		testingHandle.Fatalf("expected scalar missing section error, got %v", loadError)
 	}
+	trailingDocumentPath := writeRuntimeConfigFile(testingHandle, "trailing-section.yml", `
+web:
+  port: 8080
+---
+web:
+  port: 9090
+`)
+	if _, loadError := loader.LoadSection(trailingDocumentPath, []string{"web"}); !errors.Is(loadError, ErrParse) {
+		testingHandle.Fatalf("expected trailing document parse error, got %v", loadError)
+	} else if !strings.Contains(loadError.Error(), "trailing YAML document") {
+		testingHandle.Fatalf("expected trailing document error, got %v", loadError)
+	}
 
-	contract := mustRuntimeConfigContract(testingHandle, []configfile.EnvRequirement{})
-	undeclaredPath := writeRuntimeConfigFile(testingHandle, "section-undeclared.yml", `
+	missingExpansionPath := writeRuntimeConfigFile(testingHandle, "section-missing-expansion.yml", `
 web:
   port: ${RUNTIMECONFIG_TEST_PORT}
 `)
-	sectionLoader, loaderError := NewLoader[runtimeSectionFixture](Options[runtimeSectionFixture]{Contract: contract})
+	sectionLoader, loaderError := NewLoader[runtimeSectionFixture](Contract[runtimeSectionFixture]{
+		ExpansionLookup: mapRuntimeExpansionLookup(nil),
+	})
 	if loaderError != nil {
 		testingHandle.Fatalf("NewLoader returned error: %v", loaderError)
 	}
-	if _, loadError := sectionLoader.LoadSection(undeclaredPath, []string{"web"}); !errors.Is(loadError, ErrUndeclaredEnvironmentReference) {
+	if _, loadError := sectionLoader.LoadSection(missingExpansionPath, []string{"web"}); !errors.Is(loadError, configfile.ErrMissingEnvironmentVariables) {
 		testingHandle.Fatalf("expected section load payload error, got %v", loadError)
 	}
 }
@@ -465,36 +455,7 @@ func writeRuntimeConfigFile(testingHandle *testing.T, name string, contents stri
 	return path
 }
 
-func mustRuntimeConfigRequirement(testingHandle *testing.T, name string, required bool, schemaKind string) configfile.EnvRequirement {
-	testingHandle.Helper()
-	var schema configfile.EnvValueSchema
-	if strings.TrimSpace(schemaKind) != "" {
-		var schemaError error
-		schema, schemaError = configfile.EnvValueSchemaForKind(schemaKind)
-		if schemaError != nil {
-			testingHandle.Fatalf("EnvValueSchemaForKind returned error: %v", schemaError)
-		}
-	}
-	requirement, requirementError := configfile.NewRequiredEnv(name, schema)
-	if !required {
-		requirement, requirementError = configfile.NewOptionalEnv(name, schema)
-	}
-	if requirementError != nil {
-		testingHandle.Fatalf("environment requirement: %v", requirementError)
-	}
-	return requirement
-}
-
-func mustRuntimeConfigContract(testingHandle *testing.T, requirements []configfile.EnvRequirement) configfile.EnvContract {
-	testingHandle.Helper()
-	contract, contractError := configfile.NewEnvContract(requirements)
-	if contractError != nil {
-		testingHandle.Fatalf("NewEnvContract returned error: %v", contractError)
-	}
-	return contract
-}
-
-func mapRuntimeEnvironmentLookup(values map[string]string) configfile.EnvironmentLookup {
+func mapRuntimeExpansionLookup(values map[string]string) ExpansionLookup {
 	return func(name string) (string, bool) {
 		value, found := values[name]
 		return value, found
