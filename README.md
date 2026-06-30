@@ -70,19 +70,20 @@ Strict YAML configuration loading for applications.
 ## Runtimeconfig
 Application runtime config loading built on top of `configfile`.
 
-- **NewLoader[T]** - Build a typed loader that resolves `--config`-style paths,
-  reads one YAML file, requires every YAML environment reference to be declared
-  in an `EnvContract`, expands those references exactly once, decodes with
-  known-field validation, and runs application validation at the edge.
+- **Contract[T] / NewLoader[T]** - Declare the application config shape with a
+  typed Go target, optional edge validation, optional scalar value mappings,
+  and an optional interpolation lookup. The loader resolves `--config`-style
+  paths, reads one YAML file, expands `${NAME}` scalar references exactly once,
+  decodes with known-field validation, and runs application validation at the
+  edge.
 - **Loaded[T]** - Returns the typed config, expanded YAML, effective settings
-  map, environment registry/reference paths, and a selected scalar value map for
-  legacy resolver-style code.
+  map, and selected scalar value map for legacy resolver-style code.
 - **LoadSection** - Decode one required YAML section with the same strict
   contract, useful for split service binaries that share one runtime config
   file.
 - **ConfigValues** - Expose mapped effective values through `Lookup`, `Resolve`,
-  `Map`, and `Resolver` without requiring callers to read process environment
-  variables after config parsing.
+  `Map`, and `Resolver` without requiring callers to know whether a value was
+  literal YAML or populated through interpolation.
 
 ## JSEval
 Compatibility wrapper around `browsertransport` for existing callers that only
