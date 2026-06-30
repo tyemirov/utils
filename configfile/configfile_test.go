@@ -382,6 +382,17 @@ services:
 	if paths := rootScalarRegistry.ReferencePaths(testScalarStringName); !reflect.DeepEqual(paths, []string{"$"}) {
 		testingHandle.Fatalf("unexpected root scalar paths: %#v", paths)
 	}
+	keyRegistry, keyRegistryError := contract.RegistryForYAML([]byte("\"${CONFIGFILE_TEST_CONTRACT_REQUIRED}\": plain\n"))
+	if keyRegistryError != nil {
+		testingHandle.Fatalf("key RegistryForYAML returned error: %v", keyRegistryError)
+	}
+	if paths := keyRegistry.ReferencePaths(testContractRequiredName); !reflect.DeepEqual(paths, []string{"${CONFIGFILE_TEST_CONTRACT_REQUIRED}"}) {
+		testingHandle.Fatalf("unexpected key reference paths: %#v", paths)
+	}
+	_, keyRegistryError = contract.RegistryForYAML([]byte("\"${CONFIGFILE_TEST_MISSING:-default}\": plain\n"))
+	if !errors.Is(keyRegistryError, ErrInvalidEnvironmentReference) {
+		testingHandle.Fatalf("expected invalid key reference error, got %v", keyRegistryError)
+	}
 	_, sequenceRegistryError := contract.RegistryForYAML([]byte("- ${CONFIGFILE_TEST_MISSING:-default}\n"))
 	if !errors.Is(sequenceRegistryError, ErrInvalidEnvironmentReference) {
 		testingHandle.Fatalf("expected invalid sequence reference error, got %v", sequenceRegistryError)

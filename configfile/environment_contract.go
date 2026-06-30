@@ -415,6 +415,9 @@ func collectEnvironmentReferences(node *yaml.Node, path string, referencesByName
 			keyNode := node.Content[contentIndex]
 			valueNode := node.Content[contentIndex+1]
 			childPath := joinYAMLPath(path, keyNode.Value)
+			if referenceError := collectEnvironmentReferences(keyNode, childPath, referencesByName); referenceError != nil {
+				return referenceError
+			}
 			if referenceError := collectEnvironmentReferences(valueNode, childPath, referencesByName); referenceError != nil {
 				return referenceError
 			}
