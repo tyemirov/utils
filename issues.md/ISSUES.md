@@ -8,6 +8,10 @@ Each issue is formatted as `- [ ] [UT-<number>]`. When resolved it becomes `- [x
 
 ## Features (100–199)
 
+- [x] [UT-100] Add a shared strict runtime config package. (Move the reusable YAML config runtime contract needed by MediaOps and LoopAware into `utils`, so consumers can load one typed config file with declared environment placeholders instead of depending on ad hoc Cobra/Viper/env handling.)
+
+Resolved: added `runtimeconfig` with typed loaders, default/explicit config path resolution, strict declared environment references, single-pass YAML expansion through `configfile`, known-field typed decode, required section loading, effective settings, and selected scalar value maps. Expanded `configfile` built-in value schemas for host:port, duration, positive integer, email, and hex-encoded 32-byte secrets, updated `cmd/configenvcheck` to reuse the exported schema catalog, and removed the legacy `preflight/viperconfig` adapter plus Viper module dependency. Changed files: `runtimeconfig/runtimeconfig.go`, `runtimeconfig/runtimeconfig_test.go`, `configfile/schemas.go`, `configfile/schemas_test.go`, `cmd/configenvcheck/main.go`, `cmd/configenvcheck/main_test.go`, `preflight/README.md`, `go.mod`, `go.sum`, `README.md`, `ARCHITECTURE.md`, `CHANGELOG.md`, `issues.md/ISSUES.md`. Verified with `timeout -k 350s -s SIGKILL 350s make test`, `timeout -k 350s -s SIGKILL 350s make lint`, `timeout -k 350s -s SIGKILL 350s make test-coverage`, and `timeout -k 350s -s SIGKILL 350s make ci`.
+
 ## Improvements (200–299)
 
 - [x] [UT-201] Add operation-scoped proxy lease exhaustion tracking. (Move per-operation failed-lease memory into `crawler` so downstream scrapers can skip candidates that already failed during the same scrape/request batch without changing global sticky rotation behavior.)
