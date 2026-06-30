@@ -59,9 +59,30 @@ Strict YAML configuration loading for applications.
 - **EnvContract / EnvRegistry** - Declare required and optional environment
   parameters, attach value schemas when needed, expose the mandatory registry,
   and validate shell-expanded config references without logging secret values.
+- **EnvValueSchemaForKind** - Reuse built-in value schemas for booleans, URLs,
+  JSON, base64/hex 32-byte secrets, host:port addresses, durations, positive
+  integers, and email addresses.
 - **cmd/configenvcheck** - Validate a YAML config plus dotenv inputs from
   deployment preflights, including optional variables and built-in value schemas
-  for booleans, URLs, JSON, and base64-encoded 32-byte keys.
+  for booleans, URLs, JSON, base64/hex keys, host:port values, durations,
+  positive integers, and email addresses.
+
+## Runtimeconfig
+Application runtime config loading built on top of `configfile`.
+
+- **NewLoader[T]** - Build a typed loader that resolves `--config`-style paths,
+  reads one YAML file, requires every YAML environment reference to be declared
+  in an `EnvContract`, expands those references exactly once, decodes with
+  known-field validation, and runs application validation at the edge.
+- **Loaded[T]** - Returns the typed config, expanded YAML, effective settings
+  map, environment registry/reference paths, and a selected scalar value map for
+  legacy resolver-style code.
+- **LoadSection** - Decode one required YAML section with the same strict
+  contract, useful for split service binaries that share one runtime config
+  file.
+- **ConfigValues** - Expose mapped effective values through `Lookup`, `Resolve`,
+  `Map`, and `Resolver` without requiring callers to read process environment
+  variables after config parsing.
 
 ## JSEval
 Compatibility wrapper around `browsertransport` for existing callers that only
