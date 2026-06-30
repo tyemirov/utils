@@ -10,7 +10,9 @@ INTEGRATION_PACKAGE := ./test
 COVERAGE_THRESHOLD ?= 100
 COVERAGE_DIR := .coverage
 
-.PHONY: format check-format lint test test-unit test-integration test-coverage clean ci
+.PHONY: fmt format check-format lint test test-unit test-integration test-coverage clean ci
+
+fmt: format
 
 format:
 	$(GOFMT) -w $(GO_SOURCES)
