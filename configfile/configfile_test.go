@@ -514,6 +514,22 @@ server:
 	}
 }
 
+func TestParseYAMLDocumentRejectsTrailingDocuments(testingHandle *testing.T) {
+	_, parseError := ParseYAMLDocument([]byte(strings.TrimSpace(`
+server:
+  enabled: true
+---
+server:
+  max_workers: 12
+`)))
+	if !errors.Is(parseError, ErrParse) {
+		testingHandle.Fatalf("expected ErrParse, got %v", parseError)
+	}
+	if !strings.Contains(parseError.Error(), "trailing YAML document") {
+		testingHandle.Fatalf("expected trailing document error, got %v", parseError)
+	}
+}
+
 func TestLoadYAMLBytesRejectsTrailingDocumentAfterStrictDecode(testingHandle *testing.T) {
 	originalMarshalYAML := marshalYAML
 	marshalYAML = func(input any) ([]byte, error) {

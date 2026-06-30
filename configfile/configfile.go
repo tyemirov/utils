@@ -174,6 +174,12 @@ func InterpolateYAMLWithOptions(configPayload []byte, options EnvironmentOptions
 	return interpolatedPayload, nil
 }
 
+// ParseYAMLDocument decodes exactly one YAML document and rejects trailing
+// documents.
+func ParseYAMLDocument(configPayload []byte) (yaml.Node, error) {
+	return decodeSingleYAMLDocument(configPayload)
+}
+
 func decodeSingleYAMLDocument(configPayload []byte) (yaml.Node, error) {
 	decoder := yaml.NewDecoder(bytes.NewReader(configPayload))
 	var document yaml.Node
