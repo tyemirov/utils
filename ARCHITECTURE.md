@@ -11,7 +11,17 @@ only the helpers they need.
   forwarding, and one-shot render helpers.
 - `configfile`: Strict YAML config loading with scalar-only environment
   interpolation, explicit missing-variable errors, no default-substitution
-  syntax, single-document stream validation, and known-field decoding.
+  syntax, single-document stream validation, known-field decoding, and
+  registry-backed required/optional environment validation with optional value
+  schemas. `cmd/configenvcheck` exposes the same contract to deployment
+  preflights without requiring each caller to write a Go adapter first.
+- `runtimeconfig`: Application runtime config loading on top of `configfile`.
+  Consumers declare a typed `Contract[T]` with optional validation and scalar
+  value mappings. The loader resolves an explicit config path or `config.yml`,
+  expands YAML scalar interpolation references once through the configured
+  lookup or process environment, decodes typed config with known fields, runs
+  edge validation, and returns effective settings plus selected scalar values
+  for legacy resolver-style code without importing Cobra or Viper.
 - `crawler`: Shared crawling helpers, including provider/user-aware proxy lease
   selection and operation-scoped failed-lease tracking for scrape batches.
 - `file`: Filesystem helpers (delete, close, read/write convenience).

@@ -21,6 +21,12 @@ const (
 	testScalarStringName        = "CONFIGFILE_TEST_STRING"
 )
 
+const (
+	testContractExtraName    = "CONFIGFILE_TEST_CONTRACT_EXTRA"
+	testContractOptionalName = "CONFIGFILE_TEST_CONTRACT_OPTIONAL"
+	testContractRequiredName = "CONFIGFILE_TEST_CONTRACT_REQUIRED"
+)
+
 type configFileFixture struct {
 	Server configFileServerFixture `yaml:"server"`
 }
@@ -34,6 +40,18 @@ type configFileServerFixture struct {
 	Ratio       float64  `yaml:"ratio"`
 	Secret      string   `yaml:"secret"`
 	Names       []string `yaml:"names"`
+}
+
+type configFileContractFixture struct {
+	Service configFileContractServiceFixture `yaml:"service"`
+}
+
+type configFileContractServiceFixture struct {
+	Enabled bool   `yaml:"enabled"`
+	HostURL string `yaml:"host_url"`
+	Secret  string `yaml:"secret"`
+	APIKey  string `yaml:"api_key"`
+	Label   string `yaml:"label"`
 }
 
 func TestLoadYAMLReadsFileAndInterpolatesScalars(testingHandle *testing.T) {
@@ -86,6 +104,333 @@ server:
 	}
 	if !reflect.DeepEqual(decoded.Server.Names, []string{"secret-value"}) {
 		testingHandle.Fatalf("unexpected names: %#v", decoded.Server.Names)
+	}
+}
+
+func TestEnvContractRegistryForYAMLExposesMandatoryReferences(testingHandle *testing.T) {
+	booleanSchema := mustTestSchema(testingHandle, "bool", func(value string) error {
+		normalizedValue := strings.ToLower(strings.TrimSpace(value))
+		if normalizedValue != "true" && normalizedValue != "false" {
+			return errors.New("expected boolean")
+		}
+		return nil
+	})
+	requiredFlag := mustTestRequirement(testingHandle, true, testScalarBooleanName, booleanSchema)
+	optionalSecret := mustTestRequirement(testingHandle, false, testContractOptionalName, nil)
+	extraRequired := mustTestRequirement(testingHandle, true, testContractExtraName, nil)
+	contract, contractError := NewEnvContract([]EnvRequirement{requiredFlag, optionalSecret, extraRequired})
+	if contractError != nil {
+		testingHandle.Fatalf("NewEnvContract returned error: %v", contractError)
+	}
+
+	registry, registryError := contract.RegistryForYAML([]byte(strings.TrimSpace(`
+service:
+  enabled: ${CONFIGFILE_TEST_BOOL}
+  host_url: "https://${CONFIGFILE_TEST_HOST}/api"
+  secret: ${CONFIGFILE_TEST_CONTRACT_REQUIRED}
+  api_key: ${CONFIGFILE_TEST_CONTRACT_OPTIONAL}
+`)))
+	if registryError != nil {
+		testingHandle.Fatalf("RegistryForYAML returned error: %v", registryError)
+	}
+
+	expectedMandatory := []string{
+		testScalarBooleanName,
+		testContractExtraName,
+		testContractRequiredName,
+		testEmbeddedHostName,
+	}
+	if mandatoryNames := requirementNames(registry.Mandatory()); !reflect.DeepEqual(mandatoryNames, expectedMandatory) {
+		testingHandle.Fatalf("expected mandatory names %#v, got %#v", expectedMandatory, mandatoryNames)
+	}
+	if requirements := registry.Requirements(); len(requirements) != 5 {
+		testingHandle.Fatalf("expected 5 registry requirements, got %#v", requirements)
+	}
+	if paths := registry.ReferencePaths(testEmbeddedHostName); !reflect.DeepEqual(paths, []string{"service.host_url"}) {
+		testingHandle.Fatalf("unexpected host reference paths: %#v", paths)
+	}
+	if paths := registry.ReferencePaths(testContractExtraName); len(paths) != 0 {
+		testingHandle.Fatalf("expected extra requirement without reference paths, got %#v", paths)
+	}
+	if optionalRequirement, found := registry.Requirement(testContractOptionalName); !found || optionalRequirement.Required() {
+		testingHandle.Fatalf("expected optional requirement, found=%v requirement=%#v", found, optionalRequirement)
+	}
+	if flagRequirement, found := contract.Requirement(testScalarBooleanName); !found || flagRequirement.SchemaName() != "bool" {
+		testingHandle.Fatalf("expected bool schema requirement, found=%v requirement=%#v", found, flagRequirement)
+	}
+}
+
+func TestLoadYAMLWithOptionsValidatesRequiredEnvironmentBeforeDecode(testingHandle *testing.T) {
+	booleanSchema := mustTestSchema(testingHandle, "bool", func(value string) error {
+		switch strings.ToLower(strings.TrimSpace(value)) {
+		case "true", "false":
+			return nil
+		default:
+			return errors.New("expected boolean")
+		}
+	})
+	requiredSecret := mustTestRequirement(testingHandle, true, testContractRequiredName, nil)
+	requiredFlag := mustTestRequirement(testingHandle, true, testScalarBooleanName, booleanSchema)
+	requiredExtra := mustTestRequirement(testingHandle, true, testContractExtraName, nil)
+	registry, registryError := NewEnvRegistry([]EnvRequirement{requiredSecret, requiredFlag, requiredExtra})
+	if registryError != nil {
+		testingHandle.Fatalf("NewEnvRegistry returned error: %v", registryError)
+	}
+
+	var decoded configFileContractFixture
+	loadError := LoadYAMLBytesWithOptions(
+		[]byte("service:\n  unknown: true\n"),
+		&decoded,
+		EnvironmentOptions{
+			Lookup: mapEnvironmentLookup(map[string]string{
+				testContractRequiredName: "",
+				testScalarBooleanName:    "not-bool",
+			}),
+			Registry: registry,
+		},
+	)
+	if !errors.Is(loadError, ErrEnvironmentValidation) {
+		testingHandle.Fatalf("expected ErrEnvironmentValidation, got %v", loadError)
+	}
+	if strings.Contains(loadError.Error(), "not-bool") {
+		testingHandle.Fatalf("expected validation error to omit raw value, got %v", loadError)
+	}
+
+	var validationError EnvValidationError
+	if !errors.As(loadError, &validationError) {
+		testingHandle.Fatalf("expected EnvValidationError, got %T", loadError)
+	}
+	issues := validationError.Issues()
+	if len(issues) != 3 {
+		testingHandle.Fatalf("expected 3 validation issues, got %#v", issues)
+	}
+	expectedKinds := map[string]EnvValidationIssueKind{
+		testContractExtraName:    EnvValidationIssueMissing,
+		testContractRequiredName: EnvValidationIssueEmpty,
+		testScalarBooleanName:    EnvValidationIssueInvalid,
+	}
+	for _, issue := range issues {
+		if issue.Kind() != expectedKinds[issue.Name()] {
+			testingHandle.Fatalf("unexpected issue %#v", issue)
+		}
+		if issue.Name() == testScalarBooleanName && (issue.SchemaName() != "bool" || issue.Detail() != "expected boolean") {
+			testingHandle.Fatalf("unexpected schema issue %#v", issue)
+		}
+		if !issue.Required() {
+			testingHandle.Fatalf("expected issue to be required: %#v", issue)
+		}
+	}
+}
+
+func TestLoadYAMLWithOptionsAllowsOptionalMissingValues(testingHandle *testing.T) {
+	optionalAPIKey := mustTestRequirement(testingHandle, false, testContractOptionalName, nil)
+	contract, contractError := NewEnvContract([]EnvRequirement{optionalAPIKey})
+	if contractError != nil {
+		testingHandle.Fatalf("NewEnvContract returned error: %v", contractError)
+	}
+	payload := []byte(strings.TrimSpace(`
+service:
+  enabled: true
+  host_url: "https://example.invalid"
+  secret: "available"
+  api_key: ${CONFIGFILE_TEST_CONTRACT_OPTIONAL}
+  label: "prefix-${CONFIGFILE_TEST_CONTRACT_OPTIONAL}"
+`))
+	registry, registryError := contract.RegistryForYAML(payload)
+	if registryError != nil {
+		testingHandle.Fatalf("RegistryForYAML returned error: %v", registryError)
+	}
+
+	var decoded configFileContractFixture
+	loadError := LoadYAMLBytesWithOptions(payload, &decoded, EnvironmentOptions{
+		Lookup:   mapEnvironmentLookup(nil),
+		Registry: registry,
+	})
+	if loadError != nil {
+		testingHandle.Fatalf("LoadYAMLBytesWithOptions returned error: %v", loadError)
+	}
+	if decoded.Service.APIKey != "" {
+		testingHandle.Fatalf("expected optional API key to decode empty, got %q", decoded.Service.APIKey)
+	}
+	if decoded.Service.Label != "prefix-" {
+		testingHandle.Fatalf("expected inline optional reference to decode prefix-, got %q", decoded.Service.Label)
+	}
+}
+
+func TestEnvRegistryValidatesOptionalSchemaOnlyWhenValueIsPresent(testingHandle *testing.T) {
+	prefixSchema := mustTestSchema(testingHandle, "prefix", func(value string) error {
+		if !strings.HasPrefix(value, "ok-") {
+			return errors.New("expected ok prefix")
+		}
+		return nil
+	})
+	optionalValue := mustTestRequirement(testingHandle, false, testContractOptionalName, prefixSchema)
+	registry, registryError := NewEnvRegistry([]EnvRequirement{optionalValue})
+	if registryError != nil {
+		testingHandle.Fatalf("NewEnvRegistry returned error: %v", registryError)
+	}
+	testingHandle.Setenv(testContractOptionalName, "ok-os")
+
+	for _, lookup := range []EnvironmentLookup{
+		mapEnvironmentLookup(nil),
+		mapEnvironmentLookup(map[string]string{testContractOptionalName: ""}),
+		mapEnvironmentLookup(map[string]string{testContractOptionalName: "ok-value"}),
+		nil,
+	} {
+		if validateError := registry.Validate(lookup); validateError != nil {
+			testingHandle.Fatalf("expected optional validation success, got %v", validateError)
+		}
+	}
+
+	validateError := registry.Validate(mapEnvironmentLookup(map[string]string{testContractOptionalName: "bad"}))
+	if !errors.Is(validateError, ErrEnvironmentValidation) {
+		testingHandle.Fatalf("expected optional schema validation error, got %v", validateError)
+	}
+	var validationError EnvValidationError
+	if !errors.As(validateError, &validationError) {
+		testingHandle.Fatalf("expected EnvValidationError, got %T", validateError)
+	}
+	issues := validationError.Issues()
+	if len(issues) != 1 || issues[0].Required() || issues[0].Kind() != EnvValidationIssueInvalid {
+		testingHandle.Fatalf("unexpected optional schema issue: %#v", issues)
+	}
+}
+
+func TestEnvironmentContractRejectsInvalidDeclarations(testingHandle *testing.T) {
+	if _, schemaError := NewEnvValueSchema(" ", func(string) error { return nil }); !errors.Is(schemaError, ErrInvalidEnvironmentRequirement) {
+		testingHandle.Fatalf("expected schema name error, got %v", schemaError)
+	}
+	if _, schemaError := NewEnvValueSchema("schema", nil); !errors.Is(schemaError, ErrInvalidEnvironmentRequirement) {
+		testingHandle.Fatalf("expected schema validator error, got %v", schemaError)
+	}
+	if _, requirementError := NewRequiredEnv("bad-name", nil); !errors.Is(requirementError, ErrInvalidEnvironmentRequirement) {
+		testingHandle.Fatalf("expected invalid env name error, got %v", requirementError)
+	}
+
+	duplicateRequirement := mustTestRequirement(testingHandle, true, testContractRequiredName, nil)
+	if _, contractError := NewEnvContract([]EnvRequirement{duplicateRequirement, duplicateRequirement}); !errors.Is(contractError, ErrInvalidEnvironmentRequirement) {
+		testingHandle.Fatalf("expected duplicate contract error, got %v", contractError)
+	}
+	if _, contractError := NewEnvContract([]EnvRequirement{{}}); !errors.Is(contractError, ErrInvalidEnvironmentRequirement) {
+		testingHandle.Fatalf("expected empty contract requirement error, got %v", contractError)
+	}
+	if _, registryError := NewEnvRegistry([]EnvRequirement{duplicateRequirement, duplicateRequirement}); !errors.Is(registryError, ErrInvalidEnvironmentRequirement) {
+		testingHandle.Fatalf("expected duplicate registry error, got %v", registryError)
+	}
+	if _, registryError := NewEnvRegistry([]EnvRequirement{{}}); !errors.Is(registryError, ErrInvalidEnvironmentRequirement) {
+		testingHandle.Fatalf("expected empty registry requirement error, got %v", registryError)
+	}
+
+	contract, contractError := NewEnvContract(nil)
+	if contractError != nil {
+		testingHandle.Fatalf("NewEnvContract(nil) returned error: %v", contractError)
+	}
+	_, registryError := contract.RegistryForYAML([]byte("service:\n  secret: ${CONFIGFILE_TEST_MISSING:-default}\n"))
+	if !errors.Is(registryError, ErrInvalidEnvironmentReference) {
+		testingHandle.Fatalf("expected invalid reference error, got %v", registryError)
+	}
+
+	if referenceError := collectEnvironmentReferences(nil, "", map[string]map[string]struct{}{}); referenceError != nil {
+		testingHandle.Fatalf("expected nil node to be ignored, got %v", referenceError)
+	}
+	unknownKindError := EnvValidationError{issues: []EnvValidationIssue{{name: "CONFIGFILE_TEST_UNKNOWN", kind: EnvValidationIssueKind("unknown")}}}
+	if !strings.Contains(unknownKindError.Error(), "CONFIGFILE_TEST_UNKNOWN invalid") {
+		testingHandle.Fatalf("expected unknown issue fallback, got %v", unknownKindError)
+	}
+}
+
+func TestEnvContractCoversSequencePathsAndNoopBranches(testingHandle *testing.T) {
+	contract, contractError := NewEnvContract(nil)
+	if contractError != nil {
+		testingHandle.Fatalf("NewEnvContract returned error: %v", contractError)
+	}
+	if _, found := contract.Requirement(testContractRequiredName); found {
+		testingHandle.Fatal("expected empty contract lookup to miss")
+	}
+	if _, registryError := contract.RegistryForYAML([]byte("service: [")); !errors.Is(registryError, ErrParse) {
+		testingHandle.Fatalf("expected parse error, got %v", registryError)
+	}
+
+	registry, registryError := contract.RegistryForYAML([]byte(strings.TrimSpace(`
+- ${CONFIGFILE_TEST_CONTRACT_REQUIRED}
+- name: ${CONFIGFILE_TEST_BOOL}
+- "cost is $20"
+`)))
+	if registryError != nil {
+		testingHandle.Fatalf("RegistryForYAML returned error: %v", registryError)
+	}
+	if paths := registry.ReferencePaths(testContractRequiredName); !reflect.DeepEqual(paths, []string{"[0]"}) {
+		testingHandle.Fatalf("unexpected root sequence paths: %#v", paths)
+	}
+	if paths := registry.ReferencePaths(testScalarBooleanName); !reflect.DeepEqual(paths, []string{"[1].name"}) {
+		testingHandle.Fatalf("unexpected nested sequence paths: %#v", paths)
+	}
+	nestedRegistry, nestedRegistryError := contract.RegistryForYAML([]byte(strings.TrimSpace(`
+services:
+  - secret: ${CONFIGFILE_TEST_CONTRACT_EXTRA}
+`)))
+	if nestedRegistryError != nil {
+		testingHandle.Fatalf("nested RegistryForYAML returned error: %v", nestedRegistryError)
+	}
+	if paths := nestedRegistry.ReferencePaths(testContractExtraName); !reflect.DeepEqual(paths, []string{"services[0].secret"}) {
+		testingHandle.Fatalf("unexpected nested service paths: %#v", paths)
+	}
+	rootScalarRegistry, rootScalarRegistryError := contract.RegistryForYAML([]byte("${CONFIGFILE_TEST_STRING}\n"))
+	if rootScalarRegistryError != nil {
+		testingHandle.Fatalf("root scalar RegistryForYAML returned error: %v", rootScalarRegistryError)
+	}
+	if paths := rootScalarRegistry.ReferencePaths(testScalarStringName); !reflect.DeepEqual(paths, []string{"$"}) {
+		testingHandle.Fatalf("unexpected root scalar paths: %#v", paths)
+	}
+	keyRegistry, keyRegistryError := contract.RegistryForYAML([]byte("\"${CONFIGFILE_TEST_CONTRACT_REQUIRED}\": plain\n"))
+	if keyRegistryError != nil {
+		testingHandle.Fatalf("key RegistryForYAML returned error: %v", keyRegistryError)
+	}
+	if paths := keyRegistry.ReferencePaths(testContractRequiredName); !reflect.DeepEqual(paths, []string{"${CONFIGFILE_TEST_CONTRACT_REQUIRED}"}) {
+		testingHandle.Fatalf("unexpected key reference paths: %#v", paths)
+	}
+	_, keyRegistryError = contract.RegistryForYAML([]byte("\"${CONFIGFILE_TEST_MISSING:-default}\": plain\n"))
+	if !errors.Is(keyRegistryError, ErrInvalidEnvironmentReference) {
+		testingHandle.Fatalf("expected invalid key reference error, got %v", keyRegistryError)
+	}
+	_, sequenceRegistryError := contract.RegistryForYAML([]byte("- ${CONFIGFILE_TEST_MISSING:-default}\n"))
+	if !errors.Is(sequenceRegistryError, ErrInvalidEnvironmentReference) {
+		testingHandle.Fatalf("expected invalid sequence reference error, got %v", sequenceRegistryError)
+	}
+	if references, referenceError := scalarEnvironmentReferences("cost is $20"); referenceError != nil || len(references) != 0 {
+		testingHandle.Fatalf("expected literal dollar amount without references, got references=%#v error=%v", references, referenceError)
+	}
+	if path := joinYAMLPath("parent", " "); path != "parent.?" {
+		testingHandle.Fatalf("unexpected blank-key path: %s", path)
+	}
+	if path := indexedYAMLPath("", 2); path != "[2]" {
+		testingHandle.Fatalf("unexpected root index path: %s", path)
+	}
+
+	if validateError := (EnvRegistry{}).Validate(mapEnvironmentLookup(nil)); validateError != nil {
+		testingHandle.Fatalf("expected empty registry validation success, got %v", validateError)
+	}
+	if paths := mustEmptyPathRegistry(testingHandle).ReferencePaths(testScalarBooleanName); paths != nil {
+		testingHandle.Fatalf("expected explicit registry without paths to return nil, got %#v", paths)
+	}
+
+	requiredFlag := mustTestRequirement(testingHandle, true, testScalarBooleanName, mustTestSchema(testingHandle, "bool", func(value string) error {
+		if strings.TrimSpace(value) == "true" {
+			return nil
+		}
+		return errors.New("expected true")
+	}))
+	requiredSecret := mustTestRequirement(testingHandle, true, testContractRequiredName, nil)
+	successRegistry, successRegistryError := NewEnvRegistry([]EnvRequirement{requiredFlag, requiredSecret})
+	if successRegistryError != nil {
+		testingHandle.Fatalf("NewEnvRegistry returned error: %v", successRegistryError)
+	}
+	successLookup := mapEnvironmentLookup(map[string]string{
+		testScalarBooleanName:    "true",
+		testContractRequiredName: "secret",
+	})
+	if validateError := successRegistry.Validate(successLookup); validateError != nil {
+		testingHandle.Fatalf("expected registry validation success, got %v", validateError)
 	}
 }
 
@@ -166,6 +511,22 @@ server:
 	}
 	if !strings.Contains(loadError.Error(), "trailing YAML document") {
 		testingHandle.Fatalf("expected trailing document error, got %v", loadError)
+	}
+}
+
+func TestParseYAMLDocumentRejectsTrailingDocuments(testingHandle *testing.T) {
+	_, parseError := ParseYAMLDocument([]byte(strings.TrimSpace(`
+server:
+  enabled: true
+---
+server:
+  max_workers: 12
+`)))
+	if !errors.Is(parseError, ErrParse) {
+		testingHandle.Fatalf("expected ErrParse, got %v", parseError)
+	}
+	if !strings.Contains(parseError.Error(), "trailing YAML document") {
+		testingHandle.Fatalf("expected trailing document error, got %v", parseError)
 	}
 }
 
@@ -268,10 +629,10 @@ func TestInterpolateYAMLRejectsInvalidYAML(testingHandle *testing.T) {
 
 func TestInterpolateNodeAcceptsNilAndNonScalarNodes(testingHandle *testing.T) {
 	missingVariables := map[string]struct{}{}
-	if interpolationError := interpolateNode(nil, missingVariables); interpolationError != nil {
+	if interpolationError := interpolateNode(nil, missingVariables, OSEnvironmentLookup, EnvRegistry{}); interpolationError != nil {
 		testingHandle.Fatalf("expected nil node to be ignored, got %v", interpolationError)
 	}
-	if interpolationError := interpolateScalarNode(nil, missingVariables); interpolationError != nil {
+	if interpolationError := interpolateScalarNode(nil, missingVariables, OSEnvironmentLookup, EnvRegistry{}); interpolationError != nil {
 		testingHandle.Fatalf("expected nil scalar to be ignored, got %v", interpolationError)
 	}
 	if environmentName, referenceError := environmentNameFromReference("$CONFIGFILE_TEST_DIRECT"); referenceError != nil || environmentName != "CONFIGFILE_TEST_DIRECT" {
@@ -327,4 +688,56 @@ func unsetEnvironment(testingHandle *testing.T, environmentName string) {
 			testingHandle.Fatalf("failed to keep %s unset: %v", environmentName, restoreError)
 		}
 	})
+}
+
+func mustTestSchema(testingHandle *testing.T, name string, validate func(value string) error) EnvValueSchema {
+	testingHandle.Helper()
+	schema, schemaError := NewEnvValueSchema(name, validate)
+	if schemaError != nil {
+		testingHandle.Fatalf("NewEnvValueSchema returned error: %v", schemaError)
+	}
+	return schema
+}
+
+func mustTestRequirement(testingHandle *testing.T, required bool, name string, schema EnvValueSchema) EnvRequirement {
+	testingHandle.Helper()
+	var requirement EnvRequirement
+	var requirementError error
+	if required {
+		requirement, requirementError = NewRequiredEnv(name, schema)
+	} else {
+		requirement, requirementError = NewOptionalEnv(name, schema)
+	}
+	if requirementError != nil {
+		testingHandle.Fatalf("new env requirement returned error: %v", requirementError)
+	}
+	return requirement
+}
+
+func requirementNames(requirements []EnvRequirement) []string {
+	names := make([]string, 0, len(requirements))
+	for _, requirement := range requirements {
+		names = append(names, requirement.Name())
+	}
+	return names
+}
+
+func mapEnvironmentLookup(values map[string]string) EnvironmentLookup {
+	return func(name string) (string, bool) {
+		if values == nil {
+			return "", false
+		}
+		value, found := values[name]
+		return value, found
+	}
+}
+
+func mustEmptyPathRegistry(testingHandle *testing.T) EnvRegistry {
+	testingHandle.Helper()
+	requirement := mustTestRequirement(testingHandle, true, testScalarBooleanName, nil)
+	registry, registryError := NewEnvRegistry([]EnvRequirement{requirement})
+	if registryError != nil {
+		testingHandle.Fatalf("NewEnvRegistry returned error: %v", registryError)
+	}
+	return registry
 }

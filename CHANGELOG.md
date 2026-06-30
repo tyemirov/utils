@@ -2,6 +2,22 @@
 
 ## [Unreleased]
 
+### Features ✨
+- Add `configfile` environment contracts and registries for required/optional
+  shell-sourced config values, mandatory preflight exposure, and schema-backed
+  value validation.
+- Add `cmd/configenvcheck` for deployment preflights that validate YAML config
+  environment references against dotenv inputs and built-in schemas.
+- Add `runtimeconfig` for strict application runtime config loading with typed
+  contracts, single-pass YAML interpolation, typed decode, effective settings,
+  and selected scalar value maps without Cobra or Viper dependencies.
+- Add reusable `configfile` value schemas for host:port addresses, durations,
+  positive integers, email addresses, and hex-encoded 32-byte keys.
+
+### Removed
+- Remove the legacy `preflight/viperconfig` adapter so downstream modules can
+  adopt `runtimeconfig` without pulling Viper through `utils`.
+
 ### Bug Fixes 🐛
 - Make direct `httptransport` profiles bypass ambient `HTTP_PROXY` and `HTTPS_PROXY` environment proxies.
 - Classify proxy auth/account failures separately from transient status-0 transport errors, quarantine the affected lease, and limit retries to alternate proxy candidates.
@@ -21,6 +37,14 @@
 - Add crawler response regression coverage for neutral terminal proxy lease release.
 - Add a crawler regression covering saturated proxy lease selection through the public HTTP proxy selector path.
 - Add a configfile regression for multi-document YAML streams.
+- Add `configfile` coverage for mandatory environment registries, optional
+  values, schema failures, sequence reference paths, and contract declaration
+  errors.
+- Add command coverage for config/env validation success, missing/empty/invalid
+  values, schema declarations, dotenv parsing, and registry output.
+- Add `runtimeconfig` coverage for path resolution, missing interpolation
+  references, typed decode, effective settings, value maps, section loading,
+  and application validation errors.
 
 ## [v0.16.0] - 2026-05-29
 

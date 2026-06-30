@@ -1,12 +1,32 @@
+# Legacy ISSUES Snapshot
+
+This file preserves the pre-`.mprlab` `issues.md/ISSUES.md` tracker as it existed during the 2026-06-30 governance migration. It is not the active tracker. Use `.mprlab/ISSUES.md` for current work; legacy `UT-*` identifiers below are historical references only.
+
 # ISSUES (Append-only section-based log)
 
 Entries record newly discovered requests or changes, with their outcomes. No instructive content lives here. Read @NOTES.md for the process to follow when fixing issues.
 
-Read @AGENTS.md, @README.md and ARCHITECTURE.md. Read @POLICY.md, @NOTES.md, and @ISSUES.md under issues.md/folder. Start working on open issues. Prioritize bugfixes and maintenance. Work autonomously and stack up PRs. 
+Read @AGENTS.md, @README.md and ARCHITECTURE.md. Read @POLICY.md, @NOTES.md, and @ISSUES.md under issues.md/folder. Start working on open issues. Prioritize bugfixes and maintenance. Work autonomously and stack up PRs.
 
 Each issue is formatted as `- [ ] [UT-<number>]`. When resolved it becomes `- [x] [UT-<number>]`.
 
 ## Features (100–199)
+
+- [x] [UT-100] Add a shared strict runtime config package. (Move the reusable YAML config runtime contract needed by MediaOps and LoopAware into `utils`, so consumers can load one typed config file with declared environment placeholders instead of depending on ad hoc Cobra/Viper/env handling.)
+
+Resolved: added `runtimeconfig` with typed loaders, default/explicit config path resolution, strict declared environment references, single-pass YAML expansion through `configfile`, known-field typed decode, required section loading, effective settings, and selected scalar value maps. Expanded `configfile` built-in value schemas for host:port, duration, positive integer, email, and hex-encoded 32-byte secrets, updated `cmd/configenvcheck` to reuse the exported schema catalog, and removed the legacy `preflight/viperconfig` adapter plus Viper module dependency. Changed files: `runtimeconfig/runtimeconfig.go`, `runtimeconfig/runtimeconfig_test.go`, `configfile/schemas.go`, `configfile/schemas_test.go`, `cmd/configenvcheck/main.go`, `cmd/configenvcheck/main_test.go`, `preflight/README.md`, `go.mod`, `go.sum`, `README.md`, `ARCHITECTURE.md`, `CHANGELOG.md`, `issues.md/ISSUES.md`. Verified with `timeout -k 350s -s SIGKILL 350s make test`, `timeout -k 350s -s SIGKILL 350s make lint`, `timeout -k 350s -s SIGKILL 350s make test-coverage`, and `timeout -k 350s -s SIGKILL 350s make ci`.
+
+- [ ] [UT-101] Integrate the shared runtime config package into MediaOps. (Replace MediaOps' internal runtime config clone with `utils/runtimeconfig` while preserving the current config-file ownership contract, strict YAML parsing, one-place shell interpolation, section loading, and downstream scalar value resolver behavior.)
+
+MediaOps already has a mature internal implementation of the package shape, including selected YAML config loading, `${VAR}` expansion during parse, known-field decode, section loading, and scalar mappings for delegated media commands. Use it as the first integration target because it should prove parity with low product-contract churn. The migration should update the MediaOps `utils` dependency, load the existing typed runtime document through `runtimeconfig.Contract`, move MediaOps scalar mappings onto package `ValueMappings`, parse runtime config once where the web path currently loads both typed config and value maps, convert timeline export service section loading to the package section API, and delete the obsolete internal runtime config package after callers move. The preflight shell YAML parsing remains a separate integration surface and should move toward a Go config-check command backed by the same contract instead of duplicating parser behavior in bash.
+
+Validation should use MediaOps' repository-native gates and observable entrypoints. Cover strict unknown-field rejection, trailing document rejection, missing interpolation values, value-map parity for delegated media commands, help paths that intentionally skip config loading, and the selected timeline export service section behavior.
+
+- [ ] [UT-102] Integrate the shared runtime config package into LoopAware. (Replace LoopAware's Viper/env/flag runtime configuration model with one canonical YAML config contract loaded by `utils/runtimeconfig`, with shell variables used only as interpolation inputs during config parsing.)
+
+LoopAware is the larger contract migration. The backend currently treats YAML as an admin roster supplement while Viper, environment variables, and flags supply most runtime values. Move the backend to a full typed YAML runtime contract covering server address, public base URL, database, session secret, TAuth, Pinguin, notifications, and admins. Keep only the command structure and config path selection in the consumer; remove Viper-backed runtime config reads, config-value flags other than the config path, the `ADMINS` override, and the `GRPC_AUTH_TOKEN` alias unless a current product requirement explicitly reintroduces them. Shell-provided values should appear only through placeholders in the selected YAML file, and after parsing the application should consume the populated typed config without caring where each value came from.
+
+Validation should update LoopAware docs, config templates, deployment examples, and config audit tooling to describe the YAML file as the canonical runtime source. Tests should exercise the real command/config path and cover valid interpolation, missing interpolation values, unknown YAML fields, missing required values, removed env overrides, and separation between backend runtime config and the browser-facing `web/config.yml`.
 
 ## Improvements (200–299)
 
@@ -97,7 +117,177 @@ The strict config loader performs one YAML decode and returns success without re
 
 Resolved: `configfile` now decodes exactly one YAML document before interpolation and requires EOF after the strict `KnownFields(true)` decode. Added `LoadYAMLBytes` and interpolation regressions for trailing documents, malformed trailing documents, and the final strict-decode EOF check; updated configfile docs/changelog. Changed files: `configfile/configfile.go`, `configfile/configfile_test.go`, `README.md`, `ARCHITECTURE.md`, `CHANGELOG.md`, `issues.md/ISSUES.md`. Verified with `timeout -k 350s -s SIGKILL 350s make test`, `timeout -k 350s -s SIGKILL 350s make lint`, and `timeout -k 350s -s SIGKILL 350s make ci`.
 
-## Maintenance (407–449)
+## Maintenance
+
+### Recurring
+
+- [ ] [M400R] (P2) Backlog hygiene and archive
+  Goal:
+  Keep the issue tracker reliable, readable, and focused on active work while preserving resolved history in the appropriate archive.
+
+  Requirements:
+  - Cadence: run weekly during active development and before each release cut.
+  - Validate section names, identifier prefixes, recurrence suffixes, priority markers, dependencies, and duplicate IDs against the current `issues-md-format.md`.
+  - Reconcile stale statuses, duplicate issues, broken references, obsolete instructions, and entries filed under the wrong section.
+  - Move completed non-recurring history to the repository issue archive or durable documentation when the active tracker becomes noisy.
+  - Keep active, blocked, planning, and recurring entries visible in `ISSUES.md`.
+
+  Deliverables:
+  - Normalized `ISSUES.md` structure and statuses.
+  - Updated issue archive or docs when completed entries are removed from the active tracker.
+  - A short `Last run:` note summarizing the cleanup and any follow-up issues filed.
+
+  Validation:
+  - Re-read `ISSUES.md` after edits and confirm every issue is under the right section with a unique section-aware ID.
+  - Confirm recurring entries remain open and keep the `R` suffix.
+  - Confirm no active, blocked, recurring, or planning work was archived.
+
+- [ ] [M401R] (P2) Polish open issues
+  Goal:
+  Keep unresolved work executable by making each open issue concrete, ordered, and testable.
+
+  Requirements:
+  - Cadence: run weekly during active development and before handing a repo to automated execution.
+  - Review every unresolved non-recurring issue for missing context, dependencies, repro steps, acceptance criteria, and validation expectations.
+  - Make priorities concrete and ensure each open issue has actionable deliverables.
+  - Merge duplicate open issues or add explicit dependency links when separate entries must remain.
+  - Do not close or implement issues as part of this polish pass unless that work is separately requested.
+
+  Deliverables:
+  - Open issues with enough detail for a person or agent to execute without rediscovery.
+  - New or updated dependency markers where ordering matters.
+  - A short `Last run:` note listing the number of issues polished and any blockers found.
+
+  Validation:
+  - Sample the open entries after the pass and confirm each has clear next actions and validation expectations.
+  - Confirm no recurring runbook was marked complete.
+  - Confirm duplicates were merged or explicitly cross-referenced.
+
+- [ ] [M402R] (P2) Architecture and policy review
+  Goal:
+  Catch architecture, policy, and workflow drift before it becomes hidden maintenance debt.
+
+  Requirements:
+  - Cadence: run monthly, before large refactors, and after major framework or runtime changes.
+  - Review the codebase, docs, and workflow against `AGENTS.md`, `POLICY.md`, stack guides, and the current architecture notes.
+  - Look for drift from forward-only contracts, edge-validation boundaries, smart-constructor usage, testing policy, and module ownership.
+  - Record findings as new Maintenance issues with concrete scope, priority, and validation.
+  - Close the pass with a no-action note only when the review finds no actionable drift.
+
+  Deliverables:
+  - New Maintenance issues for each actionable architecture or policy drift finding.
+  - Updated notes on areas reviewed and areas intentionally left unchanged.
+  - A short `Last run:` note with the review scope and outcome.
+
+  Validation:
+  - Confirm every finding is represented as an issue with owner-readable context and validation criteria.
+  - Confirm no implementation changes were mixed into the review runbook unless separately requested.
+  - Confirm all recurring runbooks remain open.
+
+- [ ] [M403R] (P1) Dependency and security audit
+  Goal:
+  Keep third-party dependencies, runtime versions, and security-sensitive configuration within the current supported contract.
+
+  Requirements:
+  - Cadence: run weekly for active apps and before each release cut.
+  - Inspect package managers, lockfiles, language toolchains, container bases, and generated clients for known vulnerabilities or stale direct dependencies.
+  - Review auth, secret, CORS, CSP, SQL, network, and permission-sensitive configuration for drift from the current contract.
+  - Prefer current supported dependencies; do not add compatibility shims for obsolete dependency behavior.
+  - File separate Maintenance or BugFix issues for each actionable vulnerability, unsupported runtime, or security-contract gap.
+
+  Deliverables:
+  - Documented audit commands or data sources used for the pass.
+  - Updated issues for each actionable dependency or security finding.
+  - A short `Last run:` note with clean result or follow-up issue IDs.
+
+  Validation:
+  - Rerun the repository-native audit, lint, or dependency checks used for the pass.
+  - Confirm every finding is either filed, fixed under a separate issue, or explicitly marked not applicable with evidence.
+  - Confirm no secrets or private payloads were written into the tracker.
+
+- [ ] [M404R] (P1) CI, release, and artifact health
+  Goal:
+  Keep the repository's validation, release, publication, and generated artifact surfaces trustworthy.
+
+  Requirements:
+  - Cadence: run before every release, publish, or deploy, and weekly for critical services.
+  - Verify repository-native CI, lint, format, coverage, release, publish, Docker image, Pages, and artifact workflows still match the documented contract.
+  - Check generated artifacts, release tags, published images, and Pages outputs for source-to-public drift.
+  - File concrete follow-up issues for failing gates, stale artifacts, missing release prerequisites, or undocumented workflow changes.
+  - Do not perform production deployment from this runbook unless the operator explicitly requests that deployment.
+
+  Deliverables:
+  - Recorded gate status and artifact surfaces inspected.
+  - Follow-up issues for each reproducible CI, release, publish, or artifact drift problem.
+  - A short `Last run:` note with commands run and any skipped surfaces.
+
+  Validation:
+  - Use repository-native `make` targets or documented release helpers for checks.
+  - Confirm release and deployment ownership boundaries remain separate.
+  - Confirm public or published artifacts match the intended source revision when that surface is inspected.
+
+- [ ] [M405R] (P1) Code contract and static hygiene
+  Goal:
+  Keep source contracts explicit, current, and statically guarded against policy drift.
+
+  Requirements:
+  - Cadence: run monthly and before large refactors.
+  - Scan for dead code, unused exports, duplicated literals, silent fallbacks, legacy aliases, compatibility reads, and zero-but-invalid domain states.
+  - Check static analysis, coverage, schema, and contract guards that are supposed to prevent drift.
+  - File focused Maintenance issues for each concrete violation instead of broad cleanup placeholders.
+  - Keep the current canonical contract only; do not preserve obsolete behavior unless a product requirement explicitly says so.
+
+  Deliverables:
+  - Issue entries for each actionable static hygiene or contract violation.
+  - Notes on static tools, searches, and contract guards used during the pass.
+  - A short `Last run:` note with clean result or follow-up issue IDs.
+
+  Validation:
+  - Rerun the relevant static checks, contract tests, or repository searches used to identify drift.
+  - Confirm every finding has a narrow follow-up issue and does not duplicate existing backlog work.
+  - Confirm no implementation changes were mixed into the audit unless separately requested.
+
+- [ ] [M406R] (P1) Production drift and health
+  Goal:
+  Detect when production, public, or scheduled runtime state has drifted from the intended repository contract.
+
+  Requirements:
+  - Cadence: run weekly for deployed services and after each publish or deploy.
+  - Compare current source, runtime configuration, published images, public routes, scheduled jobs, and health checks for drift.
+  - Inspect real operator-facing surfaces rather than assuming merged source is deployed.
+  - File follow-up issues for stale images, stale Pages output, missing routes, failed monitors, invalid production config, or undocumented runtime differences.
+  - Stop before production deploy or destructive operator actions unless the operator explicitly requests them.
+
+  Deliverables:
+  - Recorded source revision, public artifact, route, image, or health surfaces inspected.
+  - Follow-up issues for each source-to-runtime drift finding.
+  - A short `Last run:` note with evidence links or commands used.
+
+  Validation:
+  - Verify inspected production or public surfaces directly where access is available.
+  - Confirm any deploy-required finding is filed with the exact publish/deploy boundary and owner.
+  - Confirm no production state was changed by the audit unless explicitly requested.
+
+- [ ] [M407R] (P2) Documentation and runbook hygiene
+  Goal:
+  Keep durable documentation and runbooks aligned with the current behavior users and operators actually rely on.
+
+  Requirements:
+  - Cadence: run before release cuts and after merge bursts that change user-facing or operator-facing behavior.
+  - Review README, ARCHITECTURE, PRD, CHANGELOG, docs, runbooks, setup guides, and local workflow notes for stale behavior or missing new contracts.
+  - Update docs when closed issues changed durable behavior, public APIs, operator workflows, release semantics, or deployment expectations.
+  - Remove or rewrite stale instructions instead of preserving obsolete alternatives.
+  - File separate issues for documentation gaps that require product or implementation decisions.
+
+  Deliverables:
+  - Updated documentation or filed follow-up issues for each gap.
+  - A short `Last run:` note listing docs inspected and changes made.
+  - Cross-references from archived issue history to durable docs when useful.
+
+  Validation:
+  - Check links, command names, paths, and public contract descriptions touched by the pass.
+  - Confirm docs describe the current canonical path only.
+  - Confirm issue archive and active tracker references remain consistent.
 
 - [x] [UT-410] Extract a shared browser transport runtime beneath jseval. (Add `browsertransport` with transport profiles, reusable sessions, SOCKS forwarding, HTTP client helpers, and one-shot rendering; make `jseval` a compatibility wrapper with migrated coverage.)
 
@@ -109,5 +299,3 @@ transport profiles without copying renderer internals.
 - [x] [UT-407] Add Go CI gates (fmt/vet/staticcheck/ineffassign) and fix baseline failures. (Update GitHub Actions; ignore PLAN.md; normalize -0 formatting; export pointer helpers.)
 - [x] [UT-408] Add missing ARCHITECTURE.md. (Document package layout, design principles, and tooling.)
 - [x] [UT-409] Add preflight config reporting helpers and Viper adapter for shared service tooling. (Imported preflight package from TAuth and wired Viper adapter + docs.)
-
-## Planning (do not implement yet) (450–499)
