@@ -15,6 +15,12 @@ only the helpers they need.
   registry-backed required/optional environment validation with optional value
   schemas. `cmd/configenvcheck` exposes the same contract to deployment
   preflights without requiring each caller to write a Go adapter first.
+- `runtimeconfig`: Application runtime config loading on top of `configfile`.
+  It resolves an explicit config path or `config.yml`, requires every YAML
+  environment reference to be declared in the environment contract, expands
+  references once, decodes typed config with known fields, runs edge validation,
+  and returns effective settings plus selected scalar values for legacy
+  resolver-style code without importing Cobra or Viper.
 - `crawler`: Shared crawling helpers, including provider/user-aware proxy lease
   selection and operation-scoped failed-lease tracking for scrape batches.
 - `file`: Filesystem helpers (delete, close, read/write convenience).
