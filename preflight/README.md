@@ -18,8 +18,9 @@ Use `RedactionModeRedacted` to strip sensitive fields while still reporting
 hashes for comparison. The `HashSHA256Hex` helper is provided for stable
 fingerprints (for example, signing keys or hostnames).
 
-## Viper adapter
+## Runtime config reports
 
-The `preflight/viperconfig` package loads YAML configuration with Viper,
-applies configured environment bindings, and invokes a `Redactor` to build the
-effective config payload.
+Use `runtimeconfig` to load and validate the service config before launch, then
+adapt the resulting effective settings or redacted payload behind the
+`ConfigReporter` interface. The preflight package does not own config source
+resolution.
