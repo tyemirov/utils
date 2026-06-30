@@ -8,10 +8,9 @@
   value validation.
 - Add `cmd/configenvcheck` for deployment preflights that validate YAML config
   environment references against dotenv inputs and built-in schemas.
-- Add `runtimeconfig` for strict application runtime config loading with
-  contract-declared environment references, single-pass YAML expansion, typed
-  decode, effective settings, and selected scalar value maps without Cobra or
-  Viper dependencies.
+- Add `runtimeconfig` for strict application runtime config loading with typed
+  contracts, single-pass YAML interpolation, typed decode, effective settings,
+  and selected scalar value maps without Cobra or Viper dependencies.
 - Add reusable `configfile` value schemas for host:port addresses, durations,
   positive integers, email addresses, and hex-encoded 32-byte keys.
 
@@ -43,9 +42,9 @@
   errors.
 - Add command coverage for config/env validation success, missing/empty/invalid
   values, schema declarations, dotenv parsing, and registry output.
-- Add `runtimeconfig` coverage for path resolution, undeclared environment
-  references, typed decode, effective settings, value maps, section loading, and
-  application validation errors.
+- Add `runtimeconfig` coverage for path resolution, missing interpolation
+  references, typed decode, effective settings, value maps, section loading,
+  and application validation errors.
 
 ## [v0.16.0] - 2026-05-29
 
