@@ -184,16 +184,37 @@ Legacy tracker history migrated from `issues.md/ISSUES.md` is preserved in `.mpr
 
 ## Features
 
-- [ ] [F101] Integrate the shared runtime config package into MediaOps. (Replace MediaOps' internal runtime config clone with `utils/runtimeconfig` while preserving the current config-file ownership contract, strict YAML parsing, one-place shell interpolation, section loading, and downstream scalar value resolver behavior.)
+- [x] [F101] Integrate the shared runtime config package into MediaOps. (Replace MediaOps' internal runtime config clone with `utils/runtimeconfig` while preserving the current config-file ownership contract, strict YAML parsing, one-place shell interpolation, section loading, and downstream scalar value resolver behavior.)
 
   MediaOps already has a mature internal implementation of the package shape, including selected YAML config loading, `${VAR}` expansion during parse, known-field decode, section loading, and scalar mappings for delegated media commands. Use it as the first integration target because it should prove parity with low product-contract churn. The migration should update the MediaOps `utils` dependency, load the existing typed runtime document through `runtimeconfig.Contract`, move MediaOps scalar mappings onto package `ValueMappings`, parse runtime config once where the web path currently loads both typed config and value maps, convert timeline export service section loading to the package section API, and delete the obsolete internal runtime config package after callers move. The preflight shell YAML parsing remains a separate integration surface and should move toward a Go config-check command backed by the same contract instead of duplicating parser behavior in bash.
 
   Validation should use MediaOps' repository-native gates and observable entrypoints. Cover strict unknown-field rejection, trailing document rejection, missing interpolation values, value-map parity for delegated media commands, help paths that intentionally skip config loading, and the selected timeline export service section behavior.
+  Resolution:
+  Implemented in MediaOps on `tyemirov/feature/F101-utils-runtimeconfig-mediaops`. MediaOps now depends on `github.com/tyemirov/utils v0.17.0`, routes typed runtime config loading, section loading, path resolution, and scalar value mappings through `utils/runtimeconfig`, and parses the web runtime config once for both typed settings and delegated value resolution. The remaining MediaOps `internal/runtimeconfig` package is a thin app adapter over the shared package rather than a parser clone. MediaOps docs and local issue notes were updated.
 
-- [ ] [F102] Integrate the shared runtime config package into LoopAware. (Replace LoopAware's Viper/env/flag runtime configuration model with one canonical YAML config contract loaded by `utils/runtimeconfig`, with shell variables used only as interpolation inputs during config parsing.)
+  Validation:
+  `timeout -k 350s -s SIGKILL 350s go test ./internal/runtimeconfig ./internal/webapp ./internal/cli -count=1`
+  `timeout -k 350s -s SIGKILL 350s make test`
+  `timeout -k 30s -s SIGKILL 30s make lint`
+  `timeout -k 350s -s SIGKILL 350s make test-go-coverage`
+  `timeout -k 350s -s SIGKILL 350s make ci`
+
+- [x] [F102] Integrate the shared runtime config package into LoopAware. (Replace LoopAware's Viper/env/flag runtime configuration model with one canonical YAML config contract loaded by `utils/runtimeconfig`, with shell variables used only as interpolation inputs during config parsing.)
 
   LoopAware is the larger contract migration. The backend currently treats YAML as an admin roster supplement while Viper, environment variables, and flags supply most runtime values. Move the backend to a full typed YAML runtime contract covering server address, public base URL, database, session secret, TAuth, Pinguin, notifications, and admins. Keep only the command structure and config path selection in the consumer; remove Viper-backed runtime config reads, config-value flags other than the config path, the `ADMINS` override, and the `GRPC_AUTH_TOKEN` alias unless a current product requirement explicitly reintroduces them. Shell-provided values should appear only through placeholders in the selected YAML file, and after parsing the application should consume the populated typed config without caring where each value came from.
 
   Validation should update LoopAware docs, config templates, deployment examples, and config audit tooling to describe the YAML file as the canonical runtime source. Tests should exercise the real command/config path and cover valid interpolation, missing interpolation values, unknown YAML fields, missing required values, removed env overrides, and separation between backend runtime config and the browser-facing `web/config.yml`.
+  Resolution:
+  Implemented in LoopAware on `tyemirov/feature/F102-utils-runtimeconfig-loopaware`. Added `internal/serverconfig` as the app-specific typed YAML contract backed by `github.com/tyemirov/utils/runtimeconfig`, reduced the server command to `--config`, removed Viper-backed runtime reads, removed runtime config flags, removed the `ADMINS` override and `GRPC_AUTH_TOKEN` alias from the backend path, expanded `configs/config.loopaware.yml` into the full backend runtime contract, added a test-specific mounted backend config, updated config audit to load the mounted YAML with compose env placeholders, and updated README, architecture, config docs, changelog, and local issue notes.
+
+  Validation:
+  Baseline `timeout -k 350s -s SIGKILL 350s make ci`
+  `timeout -k 350s -s SIGKILL 350s go test ./internal/serverconfig ./cmd/server ./cmd/configaudit -count=1`
+  `timeout -k 350s -s SIGKILL 350s make config-audit`
+  `timeout -k 350s -s SIGKILL 350s go test ./... -count=1`
+  `timeout -k 350s -s SIGKILL 350s make lint`
+  Final `timeout -k 350s -s SIGKILL 350s make ci` with 444 Playwright/API integration specs.
 
 ## Planning
+
+- [ ] [B043] Release lifecycle depended on sibling agentSkills/gitrelease; vendor the canonical Go module bundle, route all lifecycle targets locally, and validate the observable Make contract.
