@@ -5,6 +5,20 @@
 ### Improvements
 - Added strict local release, exact publication, and Go module proxy deployment targets.
 
+## [v0.17.1] - 2026-08-09
+
+- Merge pull request #40 from tyemirov/tyemirov/feature/F101-F102-runtimeconfig-integrations
+- Merge remote-tracking branch 'origin/master' into tyemirov/feature/F101-F102-runtimeconfig-integrations
+- test: cover repository-owned release lifecycle tooling
+- feat(release): add immutable Go module release lifecycle
+- docs: document release lifecycle commands
+- feat(release): add Go module release lifecycle targets
+- feat(release): add strict release and module proxy targets
+- docs: expand repository guidance references
+- docs: establish technical writing standards and agent guidance
+- Merge pull request #39 from tyemirov/issues-md-1782933103668
+- Update ISSUES.md
+
 ## [v0.17.0] - 2026-06-30
 
 ### Features ✨
