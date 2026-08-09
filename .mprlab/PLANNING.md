@@ -19,11 +19,15 @@ Suggested shape:
 ```text
 - [ ] Read repo guidance and target issue.
 - [ ] Inspect the current implementation and tests.
+- [ ] Use the initial validation result for application changes.
 - [ ] Make the scoped change.
-- [ ] Run focused validation.
+- [ ] Run the smallest applicable target during the change.
+- [ ] Complete the applicable validation after the last change.
 - [ ] Update issue notes or docs.
 ```
 
 ## Completion
 
-A change is complete only when requested edits are done, required issue or documentation notes are updated, and validation has passed or a concrete blocker is documented.
+Complete a change only after you complete all requested edits and necessary documentation updates.
+
+The applicable validation after the last change must pass. If validation cannot pass, record the concrete blocker.

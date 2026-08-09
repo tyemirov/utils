@@ -7,7 +7,34 @@ This document describes the canonical ISSUES.md layout and section-aware identif
 - The file starts with a title line, for example `# ISSUES`.
 - Issues are grouped under level-2 headings.
 - Sections are `BugFixes`, `Improvements`, `Maintenance`, `Features`, and `Planning`.
-- Optional subheadings may organize a section, but issue IDs must still match the parent section.
+- Optional subheadings can organize a section, but issue IDs must still match the parent section.
+
+## Issue Classification
+
+Classify each issue by its requested outcome. Priority, urgency, affected code, and title words do not control the section.
+
+Use this ordered test:
+
+1. Use `BugFixes` only for an observed and reproducible violation of a current canonical contract.
+2. Use `Features` for a new user or operator capability, public interface, resource kind, workflow, or product behavior.
+3. Use `Improvements` for a one-time change to an existing capability, architecture, test system, or acceptance boundary.
+4. Use `Maintenance` for repeatable upkeep under an unchanged solution contract. The same activity must remain valid for a future run.
+5. Use `Planning` for analysis, a decision, or a plan that does not authorize implementation.
+
+File each reproducible defect from an acceptance or migration issue as a separate BugFix issue. Split mixed outcomes across their correct sections.
+
+Use priority and blocked state as separate attributes. Correct a misclassified unresolved issue before implementation. Preserve completed issue IDs as historical references.
+
+## Resolved Issue Hygiene
+
+Before archival, review each resolved non-recurring issue for durable product,
+architecture, operator, security, testing, and skill consequences. Update each
+affected source-of-truth document or skill before you move the issue.
+
+Preserve the complete resolved entry and its identifier in the repository
+archive. Keep unresolved, blocked, planning, and recurring issues in the active
+tracker. Validate identifiers, dependencies, and duplicate IDs across both
+files.
 
 ## Issue Entries
 
@@ -23,10 +50,11 @@ Rules:
 - `[-]` means taken.
 - `[!]` means blocked and must include a `Blocked:` body line.
 - `[x]` means closed.
-- The external ID is required.
+- The external ID is necessary.
 - Priority `(P0)` through `(P2)` is optional.
 - Dependencies `{ID,ID}` are optional.
-- The title is required.
+- The title is necessary.
+- Write each new or changed title in ASD-STE100 Simplified Technical English.
 
 ## Identifiers
 
@@ -48,7 +76,7 @@ Legacy repo-prefixed identifiers are invalid.
 
 ## Body Text
 
-Additional body lines are indented by two spaces. Structured issue bodies should use plain labels:
+Indent additional body lines by two spaces. Structured issue bodies must use plain labels:
 
 - `Goal:`
 - `Requirements:`
@@ -56,4 +84,6 @@ Additional body lines are indented by two spaces. Structured issue bodies should
 - `Validation:`
 - `Blocked:`
 
-`Blocked:` is required only for blocked issues and must name the external dependency, missing input, or policy decision preventing progress.
+`Blocked:` is necessary only for blocked issues. It must identify the dependency, input, or policy decision that prevents progress.
+
+Write each new or changed body in ASD-STE100. Use `.mprlab/AGENTS.DOCS.md` and `.mprlab/TERMINOLOGY.md`.

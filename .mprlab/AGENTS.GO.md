@@ -2,12 +2,12 @@
 
 ## Scope
 
-Backend guidance for Go code. Follow root `AGENTS.md` and `.mprlab/POLICY.md` for shared workflow and confident-programming rules.
+This file gives backend rules for Go code. Obey root `AGENTS.md` and `.mprlab/POLICY.md` for shared workflow rules.
 
 ## Core Principles
 
 - Reuse existing code first.
-- Favor data structures, registries, and cohesive types over branching logic.
+- Prefer data structures, registries, and cohesive types instead of branching logic.
 - Inject external effects: I/O, network, time, randomness, and OS state.
 - Keep core logic pure where practical.
 - Accept domain types instead of loose primitives when invariants exist.
@@ -32,13 +32,8 @@ Backend guidance for Go code. Follow root `AGENTS.md` and `.mprlab/POLICY.md` fo
 
 ## Validation
 
-Use repo-native targets:
+Use `.mprlab/POLICY.md` for validation.
 
-```bash
-make fmt
-make lint
-make test
-make ci
-```
+During the change, run the smallest Go target that validates the changed contract.
 
-When wired, `make lint` should include `go vet`, `staticcheck`, and `ineffassign`.
+When these tools are part of the repository contract, `make lint` must include `go vet`, `staticcheck`, and `ineffassign`.

@@ -74,11 +74,14 @@ Read these files before editing:
 
 - `.mprlab/POLICY.md`: binding validation and confident-programming rules.
 - `.mprlab/PLANNING.md`: durable planning contract.
+- `.mprlab/AGENTS.DOCS.md`: ASD-STE100 documentation rules.
+- `.mprlab/TERMINOLOGY.md`: approved repository technical terms.
 - `.mprlab/issues-md-format.md`: issue tracker format and recurring identifier rules.
 - `.mprlab/ISSUES.md`: active issue tracker.
 - `.mprlab/AGENTS.GIT.md`: Git and pull request workflow.
 - `.mprlab/AGENTS.GO.md`: Go guidance.
+- `.mprlab/AGENTS.PY.md`: Python guidance.
 
-Do not create `.mprlab/AGENTS.md`. Scoped stack guidance belongs in `.mprlab/AGENTS.*.md` files.
-If guidance conflicts, follow `.mprlab/POLICY.md` first, then root `AGENTS.md`, then the relevant scoped stack guide.
+Do not create `.mprlab/AGENTS.md`. Scoped guidance belongs in `.mprlab/AGENTS.*.md` files.
+If guidance conflicts, follow `.mprlab/POLICY.md` first, then root `AGENTS.md`, then the relevant scoped guide.
 <!-- END MPRLAB-GOVERNANCE -->

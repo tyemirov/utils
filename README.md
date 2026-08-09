@@ -229,6 +229,24 @@ Retry-aware scheduling helpers.
 
 ---
 
+### **Release Lifecycle**
+
+- `make release` runs the complete local CI/build gate, prepares a versioned
+  module source archive and descriptor under `.git/mprlab-release`, and creates
+  only the local changelog commit and annotated SemVer tag.
+- `make publish` verifies and publishes the exact prepared release commit, tag,
+  manifest, and module assets to GitHub without rebuilding them.
+- `make deploy` requests the published version from the configured Go module
+  proxy and verifies its origin commit and `go.mod` hash. Consumer dependency
+  upgrades remain owned by each consumer repository.
+
+Set `GO_MODULE_VERSION=vX.Y.Z` when deploying a published version that is not
+tagged at the current `HEAD`. Set `GO_MODULE_PROXY` to use a different single
+proxy, or use `DEPLOY_ARGS=--dry-run` to verify publication without activating
+the proxy cache.
+
+---
+
 ### **Testing**
 
 The tool includes **table-driven tests** to ensure consistent behavior for a variety of inputs.
