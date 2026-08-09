@@ -9,8 +9,17 @@ UNIT_PACKAGES := $(shell go list ./... | grep -v '/test$$')
 INTEGRATION_PACKAGE := ./test
 COVERAGE_THRESHOLD ?= 100
 COVERAGE_DIR := .coverage
+RELEASE_ARGS ?=
+RELEASE_HELPER := $(abspath $(CURDIR)/scripts/release/release_helper.py)
+PUBLISH_RELEASE_ARGS ?=
+DEPLOY_ARGS ?=
+RELEASE_ARTIFACT_TARGETS ?= go-module-artifact
+RELEASE_TOOL_DIR := $(abspath $(CURDIR)/scripts/release)
+GO_MODULE_PROXY ?= https://proxy.golang.org
+GO_MODULE_VERSION ?=
 
-.PHONY: fmt format check-format lint test test-unit test-integration test-coverage clean ci
+.PHONY: fmt format check-format lint build test test-unit test-integration test-coverage clean ci
+.PHONY: release go-module-artifact publish deploy
 
 fmt: format
 
@@ -31,6 +40,9 @@ lint:
 	$(GO) vet ./...
 	$(STATICCHECK) ./...
 	$(INEFFASSIGN) ./...
+
+build:
+	$(GO) build ./...
 
 test-unit:
 	$(GO) test $(UNIT_PACKAGES)
@@ -62,4 +74,16 @@ clean:
 	$(GO) clean -cache -testcache
 	rm -rf $(COVERAGE_DIR)
 
-ci: check-format lint test test-coverage
+ci: check-format lint build test test-coverage
+
+release:
+	@RELEASE_HELPER="$(RELEASE_HELPER)" RELEASE_ARTIFACT_TARGETS="$(RELEASE_ARTIFACT_TARGETS)" "$(RELEASE_TOOL_DIR)/prepare_release.sh" $(RELEASE_ARGS)
+
+go-module-artifact:
+	@"$(RELEASE_TOOL_DIR)/prepare_go_module_artifact.sh"
+
+publish:
+	@RELEASE_HELPER="$(RELEASE_HELPER)" "$(RELEASE_TOOL_DIR)/publish_release.sh" $(PUBLISH_RELEASE_ARGS)
+
+deploy:
+	@"$(RELEASE_TOOL_DIR)/deploy_go_module_artifact.sh" --proxy "$(GO_MODULE_PROXY)" $(if $(GO_MODULE_VERSION),--version "$(GO_MODULE_VERSION)") $(DEPLOY_ARGS)
