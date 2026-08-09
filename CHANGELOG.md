@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Improvements
+- Added strict local release, exact publication, and Go module proxy deployment targets.
+
 ## [v0.17.0] - 2026-06-30
 
 ### Features ✨
