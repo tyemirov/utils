@@ -1,101 +1,96 @@
 # Architecture
 
-`tyemirov/utils` is a small collection of reusable Go packages. The repository is
-organized by package (not by application), so downstream projects can import
-only the helpers they need.
+`github.com/tyemirov/utils` contains reusable Go packages for application tasks.
+The [README catalog](README.md#find-a-library) is the entry point for package selection.
+Each package guide describes its public API, examples, and application responsibilities.
 
-## Packages
+## Module Structure
 
-- `browsertransport`: Shared proxy-aware browser and HTTP transport runtime for
-  scraping workloads, including browser profiles, reusable sessions, SOCKS
-  forwarding, and one-shot render helpers.
-- `configfile`: Strict YAML config loading with scalar-only environment
-  interpolation, explicit missing-variable errors, no default-substitution
-  syntax, single-document stream validation, known-field decoding, and
-  registry-backed required/optional environment validation with optional value
-  schemas. `cmd/configenvcheck` exposes the same contract to deployment
-  preflights without requiring each caller to write a Go adapter first.
-- `runtimeconfig`: Application runtime config loading on top of `configfile`.
-  Consumers declare a typed `Contract[T]` with optional validation and scalar
-  value mappings. The loader resolves an explicit config path or `config.yml`,
-  expands YAML scalar interpolation references once through the configured
-  lookup or process environment, decodes typed config with known fields, runs
-  edge validation, and returns effective settings plus selected scalar values
-  for legacy resolver-style code without importing Cobra or Viper.
-- `crawler`: Shared crawling helpers, including provider/user-aware proxy lease
-  selection and operation-scoped failed-lease tracking for scrape batches.
-- `file`: Filesystem helpers (delete, close, read/write convenience).
-- `jseval`: Compatibility wrapper around `browsertransport` for one-shot page
-  rendering.
-- `llm`: OpenAI-compatible chat client (`Client`) plus a retry/backoff wrapper
-  (`Factory`).
-- `math`: Small numeric helpers (`Min`, `Max`, `FormatNumber`, `ChanceOf`).
-- `pointers`: Pointer helpers for primitive values.
-- `scheduler`: Retry-aware periodic worker with exponential backoff and a
-  persistence interface for attempts.
-- `system`: Environment variable helpers.
-- `text`: String normalization helpers.
-- `test`: Black-box tests that exercise package behavior via public APIs.
+The repository has one Go module and one release process.
+Consumers import individual packages and select one version of the module.
+A package guide gives a library its own documentation within this structure.
 
-## Design Principles
+The module remains together while its packages can use the same ownership, dependency
+updates, validation, and releases. Small helpers remain in this module.
 
-- Packages are intentionally small, with a minimal public API surface.
-- Side effects (network/time) are injected where needed (for example, HTTP
-  client and sleep function injection in `llm`).
-- Validation is expected at boundaries; core helpers assume valid inputs unless
-  documented otherwise.
+## Package Relationships
 
-## Browser Rendering Stack
+The following relationships come from production imports within this repository:
 
-- `browsertransport` owns the reusable runtime for proxy-aware scraping:
-  browser transport profiles, long-lived browser sessions, short-lived render
-  tabs, SOCKS forwarding, proxy-auth wiring, one-shot page rendering, and HTTP
-  client construction. Direct HTTP transport profiles bypass ambient
-  `HTTP_PROXY` and `HTTPS_PROXY` environment variables; callers must choose an
-  explicit HTTP or SOCKS profile when a proxy is required.
-- `jseval` stays as a compatibility layer so existing downstream callers can
-  keep using `RenderPage` and `RenderPages` without depending on the richer
-  transport API directly.
+| Package | Other packages from this module |
+| --- | --- |
+| `crawler` | `browsertransport`, `httptransport` |
+| `browsertransport` | `httptransport` |
+| `runtimeconfig` | `configfile` |
+| `jseval` | `browsertransport` |
+| `cmd/configenvcheck` | `configfile` |
 
-## Crawler Proxy Rotation
+The other library packages have no production imports from this module.
+External dependencies are declared in [go.mod](go.mod).
 
-- `ProxyLeaseSelector` owns global provider/user rotation state. It keeps a
-  successful lease sticky until failure, then advances to the next provider
-  immediately while advancing the failed provider's next user for the next
-  return. When all healthy leases are already reserved by in-flight requests, it
-  reuses the least-reserved healthy lease instead of treating reservations as
-  candidate exhaustion. Neutral terminal crawler responses release their lease
-  without recording proxy success or failure, so reservations only reflect
-  active in-flight requests. Stale-generation successes still clear proxy
-  health and release their reservation, but they do not rewind provider/user
-  cursors that were advanced by a concurrent failure.
-- `ProxyLeaseAttemptScope` is caller-created for one scrape or request batch. It
-  remembers which leases failed during that operation, skips those leases on
-  later acquisitions, and returns `ErrProxyLeaseCandidatesExhausted` once every
-  configured candidate has failed.
-- `RetryPolicyRotateProxy` uses a rotation-only proxy report by default so
-  content-level retry decisions rotate away from the current lease without
-  recording proxy health failure. Platform hooks opt into critical cooldown with
-  `RetryDecision.ProxyFailureSeverity` only when the proxy itself is unhealthy.
-  `RetryDecision.ProxyFailureKind` and proxy failure diagnostics keep challenge,
-  status, transport, provider-auth, and provider-account reasons structured so
-  shared selector pools can avoid health cooldowns for content challenges and
-  explain candidate exhaustion with reason buckets. Provider credential
-  failures such as HTTP 402, HTTP 407, `Payment Required`, and
-  `Proxy Authentication Required` immediately quarantine the affected lease and
-  retry only alternate proxy candidates; ordinary status-0 transport failures
-  remain on the transient retry path.
+## Application Responsibilities
 
-## LLM Module (`llm`)
+| Library | Shared responsibilities | Consumer responsibilities |
+| --- | --- | --- |
+| [Billing](billing/README.md) | Provider operations, subscription state, webhook processing | Authentication, HTTP routes, checkout interface, credit ledger |
+| [Crawler](crawler/README.md) | Requests, proxy selection, retries, result delivery | Product selection, content rules, result storage |
+| [Browser transport](browsertransport/README.md) | Browser sessions, render tabs, proxy connections | Browser installation, page readiness, session lifetime |
+| [HTTP transport](httptransport/README.md) | HTTP client construction and proxy connections | Request content, response processing, operation lifetime |
+| [Runtime configuration](runtimeconfig/README.md) | File selection, strict decode, application validation call | Config type, validation rules, selected file path |
+| [Config file](configfile/README.md) | YAML parsing and environment interpolation | Target type, environment contract |
+| [GAuss](gauss/README.md) | Consent URL, token exchange, authenticated HTTP client | OAuth callback, state verification, token storage |
+| [LLM client](llm/README.md) | Chat request transport and retries | Endpoint selection, model selection, prompts |
+| [Scheduler](scheduler/README.md) | Due-job selection and retry timing | Persistent job repository, dispatch, ownership claims |
+| [Preflight](preflight/README.md) | Report assembly | Config redaction and dependency checks |
 
-- `Client` is the low-level HTTP client. It:
-  - Builds the JSON payload.
-  - Applies a request timeout via `context.WithTimeout`.
-  - Reads and parses the response body, returning a trimmed string result.
-- `Factory` wraps a `Client` and adds retry/backoff behavior, using a pluggable
-  `SleepFunc` to keep retry timing testable.
+## Criteria for Separate Modules
 
-## Tooling & CI
+A separate module is useful when a library needs one or more of these changes:
 
-- Local: `gofmt`, `go vet`, `staticcheck`, `ineffassign`, and `go test ./...`.
-- CI mirrors the same checks via GitHub Actions.
+- Separate ownership or a different group of consumers.
+- An separate release schedule because unrelated changes prevent consumer upgrades.
+- A separate dependency or Go toolchain requirement.
+
+Before extraction, record the affected consumers and the required public API.
+Define the new module path, ownership, dependency boundary, and release checks.
+Include all consumer import updates in the migration scope.
+Use the new canonical imports after migration.
+
+Billing is the first candidate for an extraction review. It has a clear
+application purpose and no production imports from other packages in this module.
+The crawler and transport packages form another candidate group because they
+use common code. These candidates remain in the current module until a separate
+implementation decision defines their migration.
+
+## Browser and Proxy Behavior
+
+`browsertransport` controls browser sessions, render tabs, authenticated proxy
+connections, and one-shot page rendering. `httptransport` controls HTTP client
+construction. Direct HTTP profiles bypass `HTTP_PROXY` and `HTTPS_PROXY`.
+Callers select an explicit HTTP or SOCKS profile when a proxy is required.
+
+`crawler.ProxyLeaseSelector` keeps successful leases and advances providers
+after failures. When all healthy leases are reserved, it uses the least-reserved
+healthy lease again. Neutral terminal responses release reservations without changes
+to proxy health. Success from an older generation can clear proxy health without
+reversal of the current provider cursor.
+
+`ProxyLeaseAttemptScope` records failed leases for one operation. After every
+candidate fails, acquisition returns `ErrProxyLeaseCandidatesExhausted`.
+A rotation-only decision changes the lease without a proxy health penalty.
+Platform hooks can set a critical severity when the proxy itself fails.
+Provider credential failures quarantine the affected lease and select alternative candidates.
+The [crawler guide](crawler/README.md#proxy-selection) links the public contracts and tests.
+
+## Configuration and Reports
+
+`runtimeconfig` uses `configfile` for strict YAML parsing and environment interpolation.
+Applications supply typed contracts and validation rules. Consumers use the
+resulting config and effective values after this boundary.
+`preflight` assembles reports from application-supplied config reporters and dependency checkers.
+
+## Validation
+
+The [Makefile](Makefile) controls local checks. Package tests and the `test` package
+exercise public behavior. Local protocol tests verify application contracts.
+Live provider access and consumer deployment need separate qualification.
