@@ -1,293 +1,115 @@
-# Utils
+# Utils: Go Libraries for Application Tasks
 
-A collection of small Go helpers that can be shared between projects. The
-repository is organised by package so you can import only the utilities you
-need.
+`github.com/tyemirov/utils` contains Go libraries for payments, web crawling,
+configuration, Google authorization, chat requests, and scheduled jobs.
+Each package has its own import path. All packages use one module version
+and one release process.
 
-## Browser Transport
-Reusable proxy-aware browser and HTTP transport helpers for scraping-heavy
-projects.
+## Find a Library
 
-- **Browser profiles** - Model direct, HTTP proxy auth, and SOCKS forwarder
-  browser transport modes.
-- **Session** - Reuse one browser per transport and open short-lived render tabs
-  on demand.
-- **RenderPage / RenderPages** - One-shot convenience helpers for JS-rendered
-  pages.
-- **NewHTTPClient** - Build an HTTP client bound to the same transport profile
-  model; direct profiles bypass ambient `HTTP_PROXY`/`HTTPS_PROXY` environment
-  settings while explicit HTTP and SOCKS profiles stay profile-bound.
+| Your task | Package guide | Import path |
+| --- | --- | --- |
+| Accept payments through Stripe or Paddle | [Billing](billing/README.md) | `github.com/tyemirov/utils/billing` |
+| Crawl pages, evaluate content, and rotate proxies | [Crawler](crawler/README.md) | `github.com/tyemirov/utils/crawler` |
+| Render JavaScript pages through a browser | [Browser transport](browsertransport/README.md) | `github.com/tyemirov/utils/browsertransport` |
+| Send HTTP requests through an explicit proxy | [HTTP transport](httptransport/README.md) | `github.com/tyemirov/utils/httptransport` |
+| Load and validate application configuration | [Runtime configuration](runtimeconfig/README.md) | `github.com/tyemirov/utils/runtimeconfig` |
+| Decode strict YAML and expand environment references | [Config file](configfile/README.md) | `github.com/tyemirov/utils/configfile` |
+| Authorize Google access | [GAuss](gauss/README.md) | `github.com/tyemirov/utils/gauss` |
+| Send chat-completion requests | [LLM client](llm/README.md) | `github.com/tyemirov/utils/llm` |
+| Run scheduled jobs with retries | [Scheduler](scheduler/README.md) | `github.com/tyemirov/utils/scheduler` |
+| Report configuration and dependency readiness | [Preflight](preflight/README.md) | `github.com/tyemirov/utils/preflight` |
 
-## Crawler
-Reusable crawler primitives for proxy-aware scraping workloads.
+### Small Helpers
 
-- **ProxyLeaseSelector** - Select provider/user-aware proxy leases, keep
-  successful leases sticky, reuse the least-reserved healthy lease under
-  concurrency saturation, release neutral terminal responses without poisoning
-  proxy health, clear health from stale in-flight successes without rewinding
-  provider cursors, and rotate providers immediately after reported failures or
-  rotation-only retry decisions.
-- **RetryDecision.ProxyFailureSeverity** - Let platform hooks distinguish normal
-  rotate-proxy retries that only rotate leases from critical proxy failures that
-  should immediately cooldown a candidate.
-- **RetryDecision.ProxyFailureKind** - Attach structured proxy diagnostics such
-  as challenge, status, transport, provider auth, and provider account reasons
-  so shared selector pools can rotate content challenges without poisoning proxy
-  health and can explain exhausted candidate pools.
-- **Provider credential failures** - Status 402, status 407, `Payment Required`,
-  and `Proxy Authentication Required` errors quarantine the affected lease and
-  retry only alternate proxy candidates instead of burning the normal retry
-  budget.
-- **ProxyLeaseAttemptScope** - Track failed leases for one scrape or request
-  batch so callers can skip candidates that already failed during that
-  operation and stop with a typed exhausted-candidates error.
+| Your task | Package source | Import path |
+| --- | --- | --- |
+| Read lines, read files, or save HTML files | [File](file/file.go) | `github.com/tyemirov/utils/file` |
+| Format numbers or calculate a probability result | [Math](math/math.go) | `github.com/tyemirov/utils/math` |
+| Create a pointer to a floating-point value | [Pointers](pointers/pointers.go) | `github.com/tyemirov/utils/pointers` |
+| Read required environment values or expand references | [System](system/env.go) | `github.com/tyemirov/utils/system` |
+| Normalize text or create camelCase identifiers | [Text](text/text.go) | `github.com/tyemirov/utils/text` |
+| Find the existing one-shot page API | [JSEval](jseval/jseval.go) | `github.com/tyemirov/utils/jseval` |
 
-## GAuss
-Google OAuth2 authorization and bounded scope helpers for delegated services.
+For new browser integrations, start with [browsertransport](browsertransport/README.md).
+For typed application configuration, start with [runtimeconfig](runtimeconfig/README.md).
 
-- **Scopes** - Typed scopes for Gmail (`ScopeGmailModify`, `ScopeGmailReadonly`, `ScopeGmailLabels`, `ScopeGmailSend`), YouTube (`ScopeYouTube`, `ScopeYouTubeReadonly`, `ScopeYouTubeUpload`), and identity (`ScopeEmail`, `ScopeProfile`, `ScopeOpenID`).
-- **New(Config)** - Initialize a Google OAuth2 client with edge validation and default scope settings.
-- **AuthURL** - Construct the consent page URL with offline access (`access_type=offline`) and consent prompt for refresh token issuance.
-- **Exchange** - Exchange an authorization code for an OAuth2 token including refresh tokens.
-- **TokenSource** - Build an auto-refreshing token source backed by a stored token.
-- **HTTPClient** - Construct an authenticated HTTP client that injects bearer credentials.
-- **FetchUserInfo** - Retrieve profile information for the authenticated user.
+## Start
 
-## Configfile
-Strict YAML configuration loading for applications.
+Use the Go version declared in [go.mod](go.mod).
+From your application module, add the package that your task needs:
 
-- **LoadYAML(path string, target any) error** - Read a YAML config file, expand
-  environment variables only inside YAML scalar values, reject missing
-  environment variables and trailing YAML documents, and decode with known-field
-  validation.
-- **LoadYAMLWithOptions(path string, target any, options EnvironmentOptions) error** -
-  Load a YAML config with an explicit environment registry so deployment
-  preflights can require critical shell-sourced values before decoding.
-- **LoadYAMLBytes(configPayload []byte, target any) error** - Apply the same
-  contract to already-read YAML bytes.
-- **InterpolateYAML(configPayload []byte) ([]byte, error)** - Expand YAML scalar
-  environment references before application-specific decoding.
-- **EnvContract / EnvRegistry** - Declare required and optional environment
-  parameters, attach value schemas when needed, expose the mandatory registry,
-  and validate shell-expanded config references without logging secret values.
-- **EnvValueSchemaForKind** - Reuse built-in value schemas for booleans, URLs,
-  JSON, base64/hex 32-byte secrets, host:port addresses, durations, positive
-  integers, and email addresses.
-- **cmd/configenvcheck** - Validate a YAML config plus dotenv inputs from
-  deployment preflights, including optional variables and built-in value schemas
-  for booleans, URLs, JSON, base64/hex keys, host:port values, durations,
-  positive integers, and email addresses.
-
-## Runtimeconfig
-Application runtime config loading built on top of `configfile`.
-
-- **Contract[T] / NewLoader[T]** - Declare the application config shape with a
-  typed Go target, optional edge validation, optional scalar value mappings,
-  and an optional interpolation lookup. The loader resolves `--config`-style
-  paths, reads one YAML file, expands `${NAME}` scalar references exactly once,
-  decodes with known-field validation, and runs application validation at the
-  edge.
-- **Loaded[T]** - Returns the typed config, expanded YAML, effective settings
-  map, and selected scalar value map for legacy resolver-style code.
-- **LoadSection** - Decode one required YAML section with the same strict
-  contract, useful for split service binaries that share one runtime config
-  file.
-- **ConfigValues** - Expose mapped effective values through `Lookup`, `Resolve`,
-  `Map`, and `Resolver` without requiring callers to know whether a value was
-  literal YAML or populated through interpolation.
-
-## JSEval
-Compatibility wrapper around `browsertransport` for existing callers that only
-need one-shot page rendering.
-
-## File
-Utilities that simplify common file system operations.
-
-- **RemoveAll(dir string)** - Recursively delete a directory while ignoring
-  errors.
-
-  ```go
-  file.RemoveAll("/tmp/cache")
-  ```
-
-- **RemoveFile(path string)** - Delete a single file and log any failures.
-
-  ```go
-  file.RemoveFile("/tmp/out.log")
-  ```
-
-- **CloseFile(c io.Closer)** - Safely close a file descriptor and log errors.
-
-  ```go
-  f, _ := os.Open("data.txt")
-  file.CloseFile(f)
-  ```
-
-- **ReadLines(filename string) ([]string, error)** - Read a text file into a
-  slice of lines.
-
-  ```go
-  lines, err := file.ReadLines("notes.txt")
-  if err != nil {
-      log.Fatal(err)
-  }
-  ```
-
-- **SaveFile(dir, name string, data []byte) error** - Write a `.html` file to a
-  directory, creating it if necessary.
-
-  ```go
-  err := file.SaveFile("public", "index", []byte("<h1>Hello</h1>"))
-  if err != nil {
-      log.Fatal(err)
-  }
-  ```
-
-- **ReadFile(path string) (*bytes.Reader, error)** - Load file contents into a
-  `bytes.Reader`.
-
-  ```go
-  r, err := file.ReadFile("public/index.html")
-  if err != nil {
-      log.Fatal(err)
-  }
-  ```
-
-## Math
-Helpers for basic numeric calculations and probability checks.
-
-- **Min(a, b int) int** and **Max(a, b int) int** - Return the smaller or larger
-  of two integers.
-
-  ```go
-  m := math.Min(3, 5) // 3
-  M := math.Max(3, 5) // 5
-  _ = m
-  _ = M
-  ```
-
-- **FormatNumber(f *float64) string** - Convert a floating number to a
-  human-friendly string without trailing zeros.
-
-  ```go
-  v := pointers.FromFloat(12.3400)
-  s := math.FormatNumber(v) // "12.34"
-  _ = s
-  ```
-
-- **ChanceOf(p float64) bool** - Return `true` with the given probability using
-  cryptographic randomness.
-
-  ```go
-  if math.ChanceOf(0.1) {
-      fmt.Println("10% chance hit")
-  }
-  ```
-
-## Text
-String normalisation helpers.
-
-- **Normalize(s string) string** - Trim whitespace from each line and remove
-  empty lines.
-
-  ```go
-  clean := text.Normalize(" Line 1 \n\n  Line 2 ")
-  _ = clean
-  ```
-
-- **SanitizeToCamelCase(s string) string** - Create a camelCase identifier
-  suitable for HTML IDs.
-
-  ```go
-  id := text.SanitizeToCamelCase("Example Title") // "exampleTitle"
-  ```
-
-## System
-Helpers for interacting with environment variables.
-
-- **GetEnvOrFail(name string) string** - Retrieve a required environment
-  variable or exit the program.
-
-  ```go
-  token := system.GetEnvOrFail("API_TOKEN")
-  _ = token
-  ```
-
-- **ExpandEnvVar(s string) (string, error)** - Expand `$VAR` style references and
-  trim the result.
-
-  ```go
-  path, _ := system.ExpandEnvVar("$HOME/tmp")
-  ```
-
-## Pointers
-Convenience functions for obtaining pointers to primitive values.
-
-- **FromFloat(f float64) \*float64** - Return a pointer to the provided float.
-
-  ```go
-  ptr := pointers.FromFloat(3.14)
-  _ = ptr
-  ```
-
-Unexported helpers for strings, integers and booleans exist for internal tests.
-
-## Scheduler
-Retry-aware scheduling helpers.
-
-- **Worker** - Runs a periodic scan over pending jobs, applies exponential backoff, and persists attempt results via a repository interface.
-- **ClaimingRepository (optional)** - Lets repositories atomically claim a job before side effects run; when claim is lost, the worker skips dispatch to avoid duplicate execution under contention.
-
----
-
-### **Release Lifecycle**
-
-- `make release` runs the complete local CI/build gate, prepares a versioned
-  module source archive and descriptor under `.git/mprlab-release`, and creates
-  only the local changelog commit and annotated SemVer tag.
-- `make publish` verifies and publishes the exact prepared release commit, tag,
-  manifest, and module assets to GitHub without rebuilding them.
-- `make deploy` requests the published version from the configured Go module
-  proxy and verifies its origin commit and `go.mod` hash. Consumer dependency
-  upgrades remain owned by each consumer repository.
-
-Set `GO_MODULE_VERSION=vX.Y.Z` when deploying a published version that is not
-tagged at the current `HEAD`. Set `GO_MODULE_PROXY` to use a different single
-proxy, or use `DEPLOY_ARGS=--dry-run` to verify publication without activating
-the proxy cache.
-
----
-
-### **Testing**
-
-The tool includes **table-driven tests** to ensure consistent behavior for a variety of inputs.
-
-**Run Tests:**
-
-```bash
-go test ./test -v
+```sh
+go get github.com/tyemirov/utils/configfile
 ```
 
----
+This example decodes YAML into a typed config:
 
-### **Dependencies**
+```go
+package main
 
-- **[Goldmark](https://github.com/yuin/goldmark)** - Markdown rendering and parsing.
-- **[html-to-markdown](https://github.com/JohannesKaufmann/html-to-markdown)** - HTML-to-Markdown conversion and cleaning.
-- **[net/html](https://pkg.go.dev/golang.org/x/net/html)** - HTML parsing and rendering.
+import (
+	"fmt"
+	"log"
 
----
+	"github.com/tyemirov/utils/configfile"
+)
 
-### **Contributing**
+func main() {
+	var config struct {
+		Address string `yaml:"address"`
+	}
+	if err := configfile.LoadYAMLBytes([]byte("address: localhost:8080\n"), &config); err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(config.Address)
+}
+```
 
-Contributions are welcome!
+Save the example as `main.go` in your application module. Run `go run main.go`.
+The output is `localhost:8080`.
+The package guides contain further examples, prerequisites, and application responsibilities.
 
-1. Fork the repository.
-2. Create a new branch (`feature/my-feature`).
-3. Commit changes and submit a pull request.
+## Configuration CLI
 
----
+[`cmd/configenvcheck`](cmd/configenvcheck/main.go) checks YAML environment references,
+dotenv inputs, required variables, and value schemas.
+See the [config file guide](configfile/README.md#configuration-cli) for its command syntax.
 
-### **License**
+## Package Boundaries
 
-This project is licensed under the **MIT License**. See the **LICENSE** file for details.
+The [architecture document](ARCHITECTURE.md) defines package relationships and
+criteria for separate modules. The current structure keeps one repository
+with task-specific package guides.
+
+## Development
+
+Run these targets from the repository root:
+
+```sh
+make test
+make lint
+make ci
+```
+
+The [Makefile](Makefile) defines format, lint, build, test, and coverage checks.
+`make ci` runs all these checks. `make lint` needs `staticcheck` and `ineffassign`.
+Package guides show focused test commands through the same Makefile.
+
+## Release Lifecycle
+
+- `make release` runs local CI and prepares a module archive and descriptor under `.git/mprlab-release`.
+  It creates the local changelog commit and annotated SemVer tag.
+- `make publish` verifies and publishes the prepared commit, tag, manifest, and module assets to GitHub.
+- `make deploy` requests the published version from the Go module proxy.
+  It verifies the origin commit and `go.mod` hash.
+
+Each consumer controls its dependency upgrades.
+Set `GO_MODULE_VERSION=vX.Y.Z` to select a published version that differs from the current `HEAD` tag.
+Set `GO_MODULE_PROXY` to select a different proxy.
+Use `DEPLOY_ARGS=--dry-run` to verify publication without activation of the proxy cache.
+
+## License
+
+See [LICENSE](LICENSE), [COMMERCIAL_LICENSE.md](COMMERCIAL_LICENSE.md), and
+[CONTRIBUTOR_LICENSE.md](CONTRIBUTOR_LICENSE.md) for the applicable terms.
