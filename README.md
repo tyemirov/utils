@@ -42,6 +42,17 @@ Reusable crawler primitives for proxy-aware scraping workloads.
   batch so callers can skip candidates that already failed during that
   operation and stop with a typed exhausted-candidates error.
 
+## GAuss
+Google OAuth2 authorization and bounded scope helpers for delegated services.
+
+- **Scopes** - Typed scopes for Gmail (`ScopeGmailModify`, `ScopeGmailReadonly`, `ScopeGmailLabels`, `ScopeGmailSend`), YouTube (`ScopeYouTube`, `ScopeYouTubeReadonly`, `ScopeYouTubeUpload`), and identity (`ScopeEmail`, `ScopeProfile`, `ScopeOpenID`).
+- **New(Config)** - Initialize a Google OAuth2 client with edge validation and default scope settings.
+- **AuthURL** - Construct the consent page URL with offline access (`access_type=offline`) and consent prompt for refresh token issuance.
+- **Exchange** - Exchange an authorization code for an OAuth2 token including refresh tokens.
+- **TokenSource** - Build an auto-refreshing token source backed by a stored token.
+- **HTTPClient** - Construct an authenticated HTTP client that injects bearer credentials.
+- **FetchUserInfo** - Retrieve profile information for the authenticated user.
+
 ## Configfile
 Strict YAML configuration loading for applications.
 
