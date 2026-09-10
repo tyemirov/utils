@@ -1,6 +1,6 @@
 module github.com/tyemirov/utils
 
-go 1.26
+go 1.26.0
 
 require (
 	github.com/PuerkitoBio/goquery v1.12.0
@@ -10,11 +10,13 @@ require (
 	github.com/gocolly/colly/v2 v2.3.0
 	github.com/stretchr/testify v1.9.0
 	golang.org/x/net v0.52.0
+	golang.org/x/oauth2 v0.37.0
 	gopkg.in/yaml.v3 v3.0.1
 	gorm.io/gorm v1.31.1
 )
 
 require (
+	cloud.google.com/go/compute/metadata v0.3.0 // indirect
 	github.com/andybalholm/cascadia v1.3.3 // indirect
 	github.com/antchfx/htmlquery v1.3.5 // indirect
 	github.com/antchfx/xmlquery v1.5.0 // indirect

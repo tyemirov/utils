@@ -52,11 +52,12 @@ All rules for validation, error handling, invariants, and “confident programmi
 
 ### Testing Philosophy
 
-- Testing follows an **inverted test pyramid**: most coverage comes from high-value black-box integration and end-to-end tests; unit tests are optional and exist only when they add clear implementation guardrails.
+- Use test-driven development with an inverted test pyramid.
 - We **strive for 100% test coverage**, achieved primarily through integration/black-box suites whose scenarios are exhaustive enough to exercise all meaningful branches and error paths.
 - For CLI and backend services, tests compile or run the real program/CLI entrypoints, capture exit codes and output (stdout/stderr, files, side effects), and assert against those observable results—not internal functions.
 - For web/UI, tests run the app and backing web server, drive flows through the browser, and assert against the rendered page, DOM state, events, and other user-visible behavior.
-- Unit tests are acceptable as **implementation guardrails**, but they are not product-level acceptance criteria, must not be the primary mechanism for achieving coverage, and may be removed when equivalent or stronger integration coverage exists.
+- Use focused unit tests for complex algorithms, calculations, and isolated logic when useful.
+- Require integration coverage of public behavior for product acceptance.
 
 ## Tech Stack Guides
 
@@ -68,20 +69,26 @@ Stack-specific instructions now live in dedicated files. Apply the relevant guid
 <!-- BEGIN MPRLAB-GOVERNANCE -->
 ## MPR Lab Governance
 
-Most workflow context files live under `.mprlab/`. The root `AGENTS.md` remains the repository entrypoint for agents.
+Root `AGENTS.md` is the agent entrypoint. Shared rules live under `.mprlab/`.
 
-Read these files before editing:
+Read `.mprlab/POLICY.md` for every task.
+Read the following files only when their condition applies.
+Read each selected guide in full before its first applicable action.
 
-- `.mprlab/POLICY.md`: binding validation and confident-programming rules.
-- `.mprlab/PLANNING.md`: durable planning contract.
-- `.mprlab/AGENTS.DOCS.md`: ASD-STE100 documentation rules.
-- `.mprlab/TERMINOLOGY.md`: approved repository technical terms.
-- `.mprlab/issues-md-format.md`: issue tracker format and recurring identifier rules.
-- `.mprlab/ISSUES.md`: active issue tracker.
-- `.mprlab/AGENTS.GIT.md`: Git and pull request workflow.
-- `.mprlab/AGENTS.GO.md`: Go guidance.
-- `.mprlab/AGENTS.PY.md`: Python guidance.
+- Before edits: `.mprlab/PLANNING.md`.
+- For technical prose: `.mprlab/AGENTS.DOCS.md` and `.mprlab/TERMINOLOGY.md`.
+- For issue work: the selected issue and its dependencies in `.mprlab/ISSUES.md`.
+- For tracker edits: `.mprlab/issues-md-format.md`.
+- For Git operations: `.mprlab/AGENTS.GIT.md`.
+- For Go changes: `.mprlab/AGENTS.GO.md`.
+- For Python changes: `.mprlab/AGENTS.PY.md`.
+
+File permission modes are outside agent scope.
+Never examine, validate, compare, require, change, or record a file permission mode.
+Never use a file permission mode in acceptance, security, credential, execution, publication, deployment, or failure analysis.
+The values `0600` and `7777` have no governance meaning.
+This rule does not change service authorization or operation authority.
 
 Do not create `.mprlab/AGENTS.md`. Scoped guidance belongs in `.mprlab/AGENTS.*.md` files.
-If guidance conflicts, follow `.mprlab/POLICY.md` first, then root `AGENTS.md`, then the relevant scoped guide.
+If guidance conflicts, obey `.mprlab/POLICY.md` first, then root `AGENTS.md`, then the applicable scoped guide.
 <!-- END MPRLAB-GOVERNANCE -->
