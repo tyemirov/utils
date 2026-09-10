@@ -30,8 +30,9 @@ type Config struct {
 	ClientSecret string
 	RedirectURL  string
 	Scopes       []Scope
-	// Offline controls whether to request a refresh token via offline access (default: true).
-	Offline bool
+	// Offline controls whether to request a refresh token through offline access.
+	// A nil value enables offline access. A pointer to false disables it.
+	Offline *bool
 	// Endpoint overrides the OAuth2 endpoints (defaults to google.Endpoint).
 	Endpoint *oauth2.Endpoint
 	// UserInfoURL overrides the userinfo endpoint (defaults to DefaultUserInfoEndpoint).
@@ -87,7 +88,7 @@ func New(cfg Config) (*Client, error) {
 
 	return &Client{
 		oauthConfig: oauthConfig,
-		offline:     cfg.Offline,
+		offline:     cfg.Offline == nil || *cfg.Offline,
 		userInfoURL: userInfoURL,
 	}, nil
 }

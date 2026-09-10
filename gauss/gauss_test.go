@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/tyemirov/utils/gauss"
+	"github.com/tyemirov/utils/pointers"
 	"golang.org/x/oauth2"
 )
 
@@ -80,7 +81,6 @@ func TestNew(t *testing.T) {
 			ClientID:     "client-id",
 			ClientSecret: "secret",
 			RedirectURL:  "https://example.com/callback",
-			Offline:      true,
 		})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -131,12 +131,35 @@ func TestNew(t *testing.T) {
 }
 
 func TestAuthURL(t *testing.T) {
+	t.Run("omitted offline requests offline access and consent", func(t *testing.T) {
+		client, err := gauss.New(gauss.Config{
+			ClientID:     "test-client",
+			ClientSecret: "test-secret",
+			RedirectURL:  "https://app.example.com/oauth/callback",
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		parsed, err := url.Parse(client.AuthURL("state-default"))
+		if err != nil {
+			t.Fatalf("failed to parse auth URL: %v", err)
+		}
+		query := parsed.Query()
+		if query.Get("access_type") != "offline" {
+			t.Errorf("expected access_type offline, got %q", query.Get("access_type"))
+		}
+		if query.Get("prompt") != "consent" {
+			t.Errorf("expected prompt consent, got %q", query.Get("prompt"))
+		}
+	})
+
 	t.Run("offline enabled adds offline access type and consent prompt", func(t *testing.T) {
 		client, err := gauss.New(gauss.Config{
 			ClientID:     "test-client",
 			ClientSecret: "test-secret",
 			RedirectURL:  "https://app.example.com/oauth/callback",
-			Offline:      true,
+			Offline:      pointers.FromBool(true),
 		})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -165,7 +188,7 @@ func TestAuthURL(t *testing.T) {
 			ClientID:     "test-client",
 			ClientSecret: "test-secret",
 			RedirectURL:  "https://app.example.com/oauth/callback",
-			Offline:      false,
+			Offline:      pointers.FromBool(false),
 		})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -181,8 +204,11 @@ func TestAuthURL(t *testing.T) {
 		if q.Get("state") != "state-online" {
 			t.Errorf("expected state state-online, got %s", q.Get("state"))
 		}
-		if q.Get("access_type") != "" {
+		if q.Has("access_type") {
 			t.Errorf("expected no access_type, got %s", q.Get("access_type"))
+		}
+		if q.Has("prompt") {
+			t.Errorf("expected no prompt, got %s", q.Get("prompt"))
 		}
 		if q.Get("login_hint") != "user@example.com" {
 			t.Errorf("expected login_hint user@example.com, got %s", q.Get("login_hint"))
