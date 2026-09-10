@@ -5,6 +5,37 @@
 ### Improvements
 - Added strict local release, exact publication, and Go module proxy deployment targets.
 
+## [v0.17.2] - 2026-09-10
+
+- Merge pull request #43 from tyemirov/gix/restructure-architecture-and-package-documentation
+- docs(scheduler): add README for persistent jobs and retries
+- docs(runtimeconfig): add README with usage guide and API reference
+- docs(httptransport): add README for explicit proxy connections
+- docs(gauss): add README with usage and OAuth flow overview
+- docs(crawler): add package README with usage and proxy selection guide
+- docs(configfile): add README for strict YAML and env references
+- docs(browsertransport): add README with usage and API overview
+- docs(billing): add README for Stripe and Paddle integration
+- docs(preflight): rewrite README with start guide and report contract
+- docs(llm): rewrite README with local endpoint example and API guide
+- docs: restructure root README into task-oriented overview
+- docs(architecture): rewrite guide with module structure and roles
+- docs: add repository technical nouns to TERMINOLOGY.md
+- Merge pull request #42 from tyemirov/gix/sync-mprlab-governance-and-workflow-documentation
+- fix(gauss)!: change Offline to nullable bool defaulting to enabled
+- Merge remote-tracking branch 'origin/master' into gix/sync-mprlab-governance-and-workflow-documentation
+- feat(gauss): add Google OAuth2 client with userinfo support
+- chore(deps): add oauth2 and compute metadata to go.sum
+- chore(deps): add golang.org/x/oauth2 and bump Go to 1.26.0
+- docs: add GAuss Google OAuth2 helpers to README
+- docs: refine testing philosophy and MPR Lab governance in AGENTS.md
+- docs: revise mprlab documentation and test-driven policies
+- chore: update .gitignore to scope mprlab plan ignores
+- Merge pull request #41 from tyemirov/automation/license/polyform-noncommercial
+- docs: correct license scope and rights
+- docs: identify licensed repository
+- chore: apply polyform-noncommercial license
+
 ## [v0.17.1] - 2026-08-09
 
 - Merge pull request #40 from tyemirov/tyemirov/feature/F101-F102-runtimeconfig-integrations
