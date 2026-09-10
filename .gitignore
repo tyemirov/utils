@@ -6,7 +6,10 @@ bin/
 .DS_Store
 qodana.yaml
 tools/
-PLAN.md
 cover.out
 .coverage/
 .claude/
+
+# BEGIN MPRLAB-GOVERNANCE
+/.mprlab/*-PLAN.md
+# END MPRLAB-GOVERNANCE
