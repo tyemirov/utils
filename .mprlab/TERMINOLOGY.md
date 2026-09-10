@@ -91,11 +91,23 @@ Give each term one meaning. Use the same term for the same concept in all docume
 
 ## Repository Technical Nouns
 
-Add repository-specific technical nouns below this line.
-
-```text
-- `term`: Definition with one meaning.
-```
+- `billing`: Application operations for payments and subscriptions.
+- `checkout`: A provider operation through which a customer completes a purchase.
+- `consumer`: An application that imports a package from this module.
+- `crawler`: A service that requests web pages and evaluates their content.
+- `environment variable`: A named value supplied by the process environment.
+- `Go module`: A set of Go packages with one module path and version.
+- `Go package`: Go source files in one directory with a shared package name.
+- `import path`: The identifier that Go source code uses to select a package.
+- `interpolation`: Replacement of a config reference with its environment value.
+- `OAuth scope`: A named authorization that an application requests through OAuth.
+- `proxy lease`: A selected proxy candidate reserved for an operation.
+- `redaction`: Removal of sensitive values from a report.
+- `retry`: Another attempt after an operation fails.
+- `scalar`: One YAML value that is neither a sequence nor a mapping.
+- `subscription`: A customer agreement for recurring provider charges.
+- `transport`: The component that sends HTTP requests or controls browser connections.
+- `webhook`: An HTTP request through which a provider reports an event.
 
 ## MPR Lab Technical Verbs
 
