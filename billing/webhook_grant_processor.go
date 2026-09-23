@@ -480,6 +480,12 @@ type paddleTransactionCompletedWebhookPayload struct {
 }
 
 type paddleTransactionCompletedWebhookData struct {
+	CurrencyCode   string                                `json:"currency_code"`
+	CollectionMode string                                `json:"collection_mode"`
+	InvoiceNumber  *string                               `json:"invoice_number"`
+	DiscountID     *string                               `json:"discount_id"`
+	Checkout       *PaddleTransactionCheckout            `json:"checkout"`
+	Payments       []PaddleTransactionPayment            `json:"payments"`
 	ID             string                                `json:"id"`
 	Status         string                                `json:"status"`
 	CreatedAt      string                                `json:"created_at"`
@@ -500,17 +506,23 @@ type paddleTransactionCompletedCustomer struct {
 }
 
 type paddleTransactionCompletedLineDetails struct {
-	LineItems []paddleTransactionCompletedLineItem `json:"line_items"`
+	Totals       *PaddleTransactionTotals             `json:"totals"`
+	PayoutTotals *PaddleTransactionTotals             `json:"payout_totals"`
+	LineItems    []paddleTransactionCompletedLineItem `json:"line_items"`
 }
 
 type paddleTransactionCompletedLineItem struct {
-	ID      string                                  `json:"id"`
-	PriceID string                                  `json:"price_id"`
-	Price   paddleTransactionCompletedLineItemPrice `json:"price"`
+	Quantity   int64                                   `json:"quantity"`
+	Totals     *PaddleLineTotals                       `json:"totals"`
+	UnitTotals *PaddleLineTotals                       `json:"unit_totals"`
+	ID         string                                  `json:"id"`
+	PriceID    string                                  `json:"price_id"`
+	Price      paddleTransactionCompletedLineItemPrice `json:"price"`
 }
 
 type paddleTransactionCompletedLineItemPrice struct {
-	ID string `json:"id"`
+	UnitPrice *PaddleMoney `json:"unit_price"`
+	ID        string       `json:"id"`
 }
 
 func parsePackCreditsFromMetadata(metadata map[string]interface{}) (int64, error) {

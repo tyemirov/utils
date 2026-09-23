@@ -185,6 +185,30 @@ Format: `- [ ] [B042] (P1) {I007} Title`
   Final `timeout -k 350s -s SIGKILL 350s make ci` with 444 Playwright/API integration specs.
 
 
+- [x] [F102] (P1) Expose the Paddle client for application-owned payment orders.
+  Goal:
+  Let consumers create transactions with order metadata and verify retained financial evidence through the existing shared transport.
+  Requirements:
+  - Expose a constructor for the existing Paddle commerce client.
+  - Preserve transaction currency, amounts, item quantities, and nullable processor totals.
+  - Keep transaction creation metadata under application control.
+  - Reuse existing authentication, pagination, and retry rules.
+  - Keep uncertain transaction creation as one POST without an automatic repeat.
+  - Keep application balances and credit policy outside the transport.
+  Deliverables:
+  - Public constructor, financial response types, integration tests, and package documentation.
+  Validation:
+  - Exercise public APIs against a real local HTTP server.
+  - Verify order metadata, exact string amounts, null values, and separate payout currency.
+  - Verify failed and interrupted transaction creation does not repeat the POST.
+  - Run `make ci` after the last code change.
+  Resolution:
+  Exposed `NewPaddleCommerceClient` through the existing Paddle transport.
+  Transaction reads retain exact financial fields, separate payout currency, and nullable payment evidence.
+  Public HTTP tests verify order metadata and one creation attempt after HTTP 503 or connection loss.
+  Initial and final `make ci` passed. All packages retain 100% coverage.
+  Publication and consumer adoption remain separate from this source change.
+
 ## Planning
 
 - [ ] [B043] Release lifecycle depended on sibling agentSkills/gitrelease; vendor the canonical Go module bundle, route all lifecycle targets locally, and validate the observable Make contract.
