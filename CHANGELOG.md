@@ -5,6 +5,11 @@
 ### Improvements
 - Added strict local release, exact publication, and Go module proxy deployment targets.
 
+## [v0.18.0] - 2026-09-23
+
+- Merge pull request #45 from tyemirov/feature/F102-paddle-financial-client
+- F102: expose Paddle commerce client and financial transaction evidence
+
 ## [v0.17.2] - 2026-09-10
 
 - Merge pull request #43 from tyemirov/gix/restructure-architecture-and-package-documentation
