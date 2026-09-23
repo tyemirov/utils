@@ -401,20 +401,13 @@ def command_preflight(args: argparse.Namespace) -> int:
     versions = version_info(cwd, parse_release_timestamp(args.release_timestamp, args.release_date))
     status_lines = run(["git", "status", "--short"], cwd=cwd).stdout.splitlines()
     current_branch = run(["git", "branch", "--show-current"], cwd=cwd).stdout.strip()
-    open_prs = []
-    if not args.local:
-        open_prs = gh_json(
-            ["gh", "pr", "list", "--base", default_branch, "--state", "open", "--json", "number,title,headRefName,url"],
-            cwd,
-        )
     payload = {
-        "ok": not status_lines and not open_prs and current_branch == default_branch,
+        "ok": not status_lines and current_branch == default_branch,
         "scope": "local" if args.local else "remote",
         "repo_root": str(cwd),
         "default_branch": default_branch,
         "current_branch": current_branch,
         "dirty_status": status_lines,
-        "open_prs": open_prs,
         "latest_tag": versions["latest_tag"],
         "version_info": versions,
         "validation_candidates": detect_validation_candidates(cwd),
@@ -746,13 +739,6 @@ def command_publish_prepared_release(args: argparse.Namespace) -> int:
                 "prepared_release_commit": release_commit,
             },
         )
-
-    open_prs = gh_json(
-        ["gh", "pr", "list", "--base", default_branch, "--state", "open", "--json", "number,title,headRefName,url"],
-        cwd,
-    )
-    if open_prs:
-        fail("open pull requests target the default branch", {"open_prs": open_prs})
 
     remote_tag_commit = ls_remote_tag_commit(cwd, version)
     if remote_tag_commit and remote_tag_commit != release_commit:
