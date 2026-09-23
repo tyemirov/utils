@@ -171,6 +171,23 @@ Format: `- [ ] [B042] (P1) {I007} Title`
 
 ## Features
 
+- [x] [F103] Read Paddle adjustments and adjusted transaction totals.
+  Goal:
+  Supply processor evidence for prepaid refunds and reconciliation through the existing shared client.
+  Requirements:
+  - Read all adjustments for one transaction through the Paddle list API.
+  - Retain exact adjustment amounts, statuses, item references, and payout fees.
+  - Retain adjusted transaction totals separately from original totals.
+  - Reuse the current transport, authentication, and pagination code.
+  Validation:
+  - Use real HTTP requests with controlled Paddle responses.
+  - Verify pagination, transaction scope, monetary precision, null values, and provider failures.
+  Resolution:
+  The shared client reads transaction adjustments through the existing transport and pagination code.
+  Adjustment records retain exact amounts, signed earnings, item references, states, and payout fees.
+  Transaction responses retain adjusted totals separately.
+  Public HTTP tests and final `make ci` passed with 100% Go package coverage.
+
 - [x] [F101] Integrate the shared runtime config package into MediaOps. (Replace MediaOps' internal runtime config clone with `utils/runtimeconfig` while preserving the current config-file ownership contract, strict YAML parsing, one-place shell interpolation, section loading, and downstream scalar value resolver behavior.)
 - [ ] [F001] Integrate the shared runtime config package into MediaOps.
   (Replace MediaOps' internal runtime config clone with `utils/runtimeconfig` while preserving the current config-file ownership contract, strict YAML parsing, one-place shell interpolation, section loading, and downstream scalar value resolver behavior.)

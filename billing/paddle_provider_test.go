@@ -56,6 +56,10 @@ type stubPaddleCommerceClient struct {
 	receivedListSubCustomerID string
 }
 
+func (client *stubPaddleCommerceClient) ListTransactionAdjustments(context.Context, string) ([]PaddleAdjustment, error) {
+	return nil, nil
+}
+
 func (client *stubPaddleCommerceClient) ResolveCustomerID(_ context.Context, email string) (string, error) {
 	client.receivedResolveEmail = email
 	if client.resolveCustomerErr != nil {
