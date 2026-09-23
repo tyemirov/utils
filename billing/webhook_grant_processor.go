@@ -506,9 +506,10 @@ type paddleTransactionCompletedCustomer struct {
 }
 
 type paddleTransactionCompletedLineDetails struct {
-	Totals       *PaddleTransactionTotals             `json:"totals"`
-	PayoutTotals *PaddleTransactionTotals             `json:"payout_totals"`
-	LineItems    []paddleTransactionCompletedLineItem `json:"line_items"`
+	AdjustedTotals *PaddleAdjustedTransactionTotals     `json:"adjusted_totals"`
+	Totals         *PaddleTransactionTotals             `json:"totals"`
+	PayoutTotals   *PaddleTransactionTotals             `json:"payout_totals"`
+	LineItems      []paddleTransactionCompletedLineItem `json:"line_items"`
 }
 
 type paddleTransactionCompletedLineItem struct {

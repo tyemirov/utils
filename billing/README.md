@@ -74,6 +74,20 @@ The [public client tests](paddle_commerce_client_integration_test.go) use a real
 They verify metadata, exact amounts, separate payout currency, null values, and single-attempt creation after uncertain responses.
 They do not qualify a live Paddle account.
 
+Call `ListTransactionAdjustments` to read every adjustment for one transaction.
+The client uses the Paddle limit of 50 records per page and follows the shared pagination contract.
+An empty transaction scope, duplicate adjustment identity, or unrelated transaction record produces an error.
+The client returns no partial list after an HTTP or pagination failure.
+
+Adjustment records retain status, action, original item references, exact amounts, retained fees, and signed earnings.
+Payout records retain their own currency and the original chargeback fee before currency conversion, when present.
+Transaction responses retain `adjusted_totals` separately from original totals.
+The application owns refund policy, account holds, compensating entries, and reconciliation decisions.
+See [Paddle adjustment lists](https://developer.paddle.com/api-reference/adjustments/list-adjustments/).
+
+The [adjustment client tests](paddle_adjustments_integration_test.go) use real HTTP requests with controlled processor responses.
+They verify multiple pages, financial fields, transaction isolation, and incomplete-response rejection.
+
 ## Consumer Source Example
 
 PoodleScanner imports this package in `internal/billing/service.go`,

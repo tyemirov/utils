@@ -295,6 +295,10 @@ func listPaddleCustomerResources[T any](
 	query.Set("customer_id", normalizedCustomerID)
 	query.Set("per_page", strconv.Itoa(paddleListPageSize))
 	nextPagePath := endpointPath + "?" + query.Encode()
+	return listPaddleResources[T](ctx, client, nextPagePath)
+}
+
+func listPaddleResources[T any](ctx context.Context, client *paddleAPIClient, nextPagePath string) ([]T, error) {
 	seenPagePaths := map[string]struct{}{}
 	resolvedResources := []T{}
 	for nextPagePath != "" {

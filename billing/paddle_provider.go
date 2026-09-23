@@ -87,6 +87,7 @@ type paddleCommerceClient interface {
 	ResolveCustomerEmail(context.Context, string) (string, error)
 	CreateTransaction(context.Context, paddleTransactionInput) (string, error)
 	ListCustomerTransactions(context.Context, string) ([]paddleTransactionCompletedWebhookData, error)
+	ListTransactionAdjustments(context.Context, string) ([]PaddleAdjustment, error)
 	ListCustomerSubscriptions(context.Context, string) ([]paddleSubscriptionWebhookData, error)
 	GetTransaction(context.Context, string) (paddleTransactionCompletedWebhookData, error)
 	GetSubscription(context.Context, string) (paddleSubscriptionWebhookData, error)
