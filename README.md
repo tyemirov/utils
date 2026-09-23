@@ -101,6 +101,7 @@ Package guides show focused test commands through the same Makefile.
 - `make release` runs local CI and prepares a module archive and descriptor under `.git/mprlab-release`.
   It creates the local changelog commit and annotated SemVer tag.
 - `make publish` verifies and publishes the prepared commit, tag, manifest, and module assets to GitHub.
+- Open pull requests do not block publication. The prepared source, tag, artifacts, and clean checkout must still match.
 - `make deploy` requests the published version from the Go module proxy.
   It verifies the origin commit and `go.mod` hash.
 

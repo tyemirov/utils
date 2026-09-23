@@ -11,6 +11,22 @@ Format: `- [ ] [B042] (P1) {I007} Title`
 
 ## BugFixes
 
+- [x] [B044] Permit release publication with unrelated open pull requests.
+  Goal:
+  Publish a verified release without a dependency on unrelated pull requests.
+  Evidence:
+  `make publish` rejects prepared v0.18.0 because unrelated PR 44 is open.
+  Requirements:
+  - Remove the open pull request gate from publication and remote readiness.
+  - Preserve source, tag, clean checkout, and artifact checks.
+  Validation:
+  - Do a test of the public release CLI with a prepared release and an open pull request.
+  - Verify that changed remote source and a dirty checkout remain errors.
+  Resolution:
+  The publisher and remote readiness no longer require zero open pull requests.
+  The CLI regression passes and retains the source and checkout rejection checks.
+  `make ci` passed with 100% Go package coverage.
+
 ## Improvements
 
 ## Maintenance
