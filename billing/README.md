@@ -39,6 +39,7 @@ and a database connection come from application configuration.
 
 | Task | Entry point |
 | --- | --- |
+| Create and verify application-owned Paddle orders | `NewPaddleCommerceClient` |
 | Select a provider | `NewStripeProvider`, `NewPaddleProvider` |
 | Read subscription state and create checkout sessions | `Service` |
 | Verify and process provider events | `NewWebhookHandler`, `WebhookProcessor` |
@@ -46,6 +47,32 @@ and a database connection come from application configuration.
 | Combine state and credit processors | `NewWebhookProcessorChain` |
 
 See [package documentation](doc.go) and [provider contracts](provider.go) for the integration boundaries.
+
+## Application-Owned Paddle Orders
+
+Use `NewPaddleCommerceClient(environment, apiKey, baseURL, httpClient)` when the application owns payment orders and financial reconciliation.
+The constructor uses the existing Paddle transport and accepts an optional HTTP client.
+An empty `baseURL` selects the Paddle endpoint for the configured environment.
+A nil HTTP client selects the shared direct transport.
+
+Call `CreateTransaction` with the selected customer, price, and application order metadata.
+The shared client sends that metadata as `custom_data` and creates one automatic-collection transaction.
+Transaction creation does not automatically repeat after a failed HTTP response or connection loss.
+The application must retain uncertain outcomes and reconcile them before another creation attempt.
+
+`GetTransaction` and `ListCustomerTransactions` retain currency, line quantities, exact amounts, checkout URLs, invoice numbers, and payment attempts.
+Transaction totals and payout totals retain separate currency codes.
+Amounts remain strings in the currency's lowest unit. Nullable fees and earnings remain pointers.
+Absent financial evidence remains absent. The transport does not calculate customer credits or decide when a payment permits spending.
+
+The [Paddle transaction reference](https://developer.paddle.com/api-reference/transactions/get-transaction/)
+defines the financial fields and nullable values.
+The [transaction creation reference](https://developer.paddle.com/api-reference/transactions/create-transaction/)
+defines `custom_data` and checkout creation.
+
+The [public client tests](paddle_commerce_client_integration_test.go) use a real local HTTP server.
+They verify metadata, exact amounts, separate payout currency, null values, and single-attempt creation after uncertain responses.
+They do not qualify a live Paddle account.
 
 ## Consumer Source Example
 
