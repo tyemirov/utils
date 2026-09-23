@@ -5,6 +5,13 @@
 ### Improvements
 - Added strict local release, exact publication, and Go module proxy deployment targets.
 
+## [v0.19.0] - 2026-09-23
+
+- Merge pull request #47 from tyemirov/feature/F103-paddle-adjustment-evidence
+- F103: expose Paddle adjustment and adjusted transaction evidence
+- Merge pull request #46 from tyemirov/bugfix/B044-publication-pr-gate
+- B044: publish prepared releases independently of open pull requests
+
 ## [v0.18.0] - 2026-09-23
 
 - Merge pull request #45 from tyemirov/feature/F102-paddle-financial-client
