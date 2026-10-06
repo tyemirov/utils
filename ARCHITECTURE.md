@@ -42,6 +42,7 @@ External dependencies are declared in [go.mod](go.mod).
 | [LLM client](llm/README.md) | Chat request transport and retries | Endpoint selection, model selection, prompts |
 | [Scheduler](scheduler/README.md) | Due-job selection and retry timing | Persistent job repository, dispatch, ownership claims |
 | [Preflight](preflight/README.md) | Report assembly | Config redaction and dependency checks |
+| [MCP authorization](mcpauth/README.md) | SDK identity conversion, typed principal access, and safe public errors | Token validation, session binding, scopes, application authorization, and diagnostics |
 
 ## Criteria for Separate Modules
 
@@ -88,6 +89,22 @@ The [crawler guide](crawler/README.md#proxy-selection) links the public contract
 Applications supply typed contracts and validation rules. Consumers use the
 resulting config and effective values after this boundary.
 `preflight` assembles reports from application-supplied config reporters and dependency checkers.
+
+## MCP Authorization
+
+`mcpauth` connects an application token validator to the official MCP Go SDK.
+The application supplies a typed principal, token expiration, scopes, and an explicit session binding.
+The package copies scopes into constructed tokens and each SDK result.
+The application treats principal data as immutable during a request.
+
+The SDK owns HTTP transport, bearer middleware, expiration, endpoint scopes, and public metadata.
+The application owns signature validation, trusted issuer, audience, tenant, and resource access rules.
+Unexpected validator errors reach the application failure reporter.
+HTTP clients receive a fixed public error without the original failure details.
+
+The package does not import TAuth.
+Applications can supply the public TAuth validator through a callback without a reverse module dependency.
+Consumer adoption and production operations are separate from package source acceptance.
 
 ## Validation
 
