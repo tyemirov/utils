@@ -19,6 +19,7 @@ and one release process.
 | Send chat-completion requests | [LLM client](llm/README.md) | `github.com/tyemirov/utils/llm` |
 | Run scheduled jobs with retries | [Scheduler](scheduler/README.md) | `github.com/tyemirov/utils/scheduler` |
 | Report configuration and dependency readiness | [Preflight](preflight/README.md) | `github.com/tyemirov/utils/preflight` |
+| Connect token validation to MCP authorization | [MCP authorization](mcpauth/README.md) | `github.com/tyemirov/utils/mcpauth` |
 
 ### Small Helpers
 

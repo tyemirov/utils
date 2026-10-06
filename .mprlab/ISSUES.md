@@ -171,6 +171,37 @@ Format: `- [ ] [B042] (P1) {I007} Title`
 
 ## Features
 
+- [x] [F104] (P1) {P001} Add shared MCP authorization with full test coverage.
+  Goal:
+  Connect application token validation to the official MCP SDK through `utils/mcpauth`.
+  Requirements:
+  - Implement the public API selected in `.mprlab/MCP-INTEGRATION.md`.
+  - Keep token validation under application ownership and exclude TAuth dependencies.
+  - Preserve typed principals, explicit session binding, and independent scope slices.
+  - Return safe public errors for operational failures and report the original failure once.
+  - Keep consumer adoption, publication, and deployment outside this change.
+  Deliverables:
+  - Public package, HTTP integration tests, executable examples, and package guide.
+  - Focused Makefile target and updated package catalog and architecture references.
+  Validation:
+  - Preserve the expected test failure before implementation.
+  - Verify HTTP authorization, session isolation, cancellation, and concurrent conversion.
+  - Run `make test-mcpauth` with the race detector.
+  - Run final `make ci` with 100 percent package coverage.
+  Validation evidence:
+  Initial `make ci` passed with 100 percent coverage in every existing package.
+  Before production code, `make test-mcpauth` failed because the new package contained no non-test Go files.
+  This expected compile failure records the absent public API.
+  Final `make ci` passed with 100 percent statement coverage in every Go package.
+  `make test-mcpauth` passed with the race detector and 100 percent statement coverage.
+  Resolution:
+  The shared adapter uses MCP SDK v1.8.0 without a TAuth dependency.
+  Public HTTP tests verify authorization, stateful session isolation, safe errors, and typed principals.
+  Concurrent conversion and cancellation tests passed. Independent architecture review found no remaining blockers.
+  Consumer adoption remains separate work.
+  Changed files: `mcpauth/`, `Makefile`, `go.mod`, `go.sum`, `README.md`, `ARCHITECTURE.md`,
+  `.mprlab/MCP-INTEGRATION.md`, and `.mprlab/ISSUES.md`.
+
 - [x] [F103] Read Paddle adjustments and adjusted transaction totals.
   Goal:
   Supply processor evidence for prepaid refunds and reconciliation through the existing shared client.
@@ -244,6 +275,27 @@ Format: `- [ ] [B042] (P1) {I007} Title`
 
 ## Planning
 
+- [x] [P001] (P1) Plan shared MCP authorization for application consumers.
+  Goal:
+  Define a reusable MCP authorization package in this Go module.
+  Requirements:
+  - Keep the package independent of TAuth imports.
+  - Use the official MCP Go SDK for protocol behavior.
+  - Define token validation, session binding, error behavior, and typed principal access.
+  - Define sequential adoption in LLM Proxy, ISSUES.md, and LoopAware.
+  - Keep implementation and publication outside this planning task.
+  Deliverables:
+  - Record the design and acceptance criteria in `.mprlab/MCP-INTEGRATION.md`.
+  - Review the API and dependency direction with the architect.
+  Validation:
+  - Review the changed prose against the verified STE reference.
+  - Run the document checker, Governor check, and `git diff --check`.
+  Resolution:
+  Recorded the `utils/mcpauth` API, dependency direction, acceptance criteria, and consumer sequence.
+  The architect reviewed the final proposal and reported no further technical findings.
+  The changed prose passed document checks and source review. `git diff --check` passed.
+  Governor retained seven existing differences. The tracker retained 21 existing language findings.
+  This task added no findings. Source implementation remains outside P001.
+
 - [ ] [B043] Release lifecycle depended on sibling agentSkills/gitrelease; vendor the canonical Go module bundle, route all lifecycle targets locally, and validate the observable Make contract.
 *do not implement yet*
-
