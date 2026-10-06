@@ -19,6 +19,7 @@ GO_MODULE_PROXY ?= https://proxy.golang.org
 GO_MODULE_VERSION ?=
 
 .PHONY: fmt format check-format lint build test test-unit test-integration test-coverage clean ci
+.PHONY: test-mcpauth
 .PHONY: release go-module-artifact publish deploy
 
 fmt: format
@@ -51,6 +52,10 @@ test-integration:
 	$(GO) test $(INTEGRATION_PACKAGE)
 
 test: test-unit test-integration
+
+test-mcpauth:
+	@mkdir -p $(COVERAGE_DIR)
+	$(GO) test -race -count=1 -coverprofile=$(COVERAGE_DIR)/mcpauth-focused.out ./mcpauth
 
 test-coverage:
 	@mkdir -p $(COVERAGE_DIR)
