@@ -5,6 +5,21 @@
 ### Improvements
 - Added strict local release, exact publication, and Go module proxy deployment targets.
 
+## [v0.19.1] - 2026-10-05
+
+- Merge pull request #48 from tyemirov/gix/add-shared-mcp-authorization-adapter
+- feat(mcpauth): add MCP authorization adapter for official Go SDK
+- chore(deps): update go.sum
+- build(deps): add github.com/modelcontextprotocol/go-sdk v1.8.0
+- docs: add MCP authorization to README module table
+- build: add test-mcpauth target to Makefile
+- docs: add MCP authorization to ARCHITECTURE.md
+- docs(mprlab): add shared MCP authorization integration design
+- Merge remote-tracking branch 'origin/master'
+- docs(policy): add device validation policy prohibiting physical devices
+- Merge pull request #44 from tyemirov/improvement/device-validation-20260914
+- docs: accept simulator validation and prohibit physical-device gates
+
 ## [v0.19.0] - 2026-09-23
 
 - Merge pull request #47 from tyemirov/feature/F103-paddle-adjustment-evidence
