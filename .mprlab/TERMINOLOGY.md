@@ -95,6 +95,20 @@ Give each term one meaning. Use the same term for the same concept in all docume
 
 ## Repository Technical Nouns
 
+- `access token`: A credential that authorizes requests to a protected resource.
+- `audience`: The resource identifier for which an issuer creates an access token.
+- `bearer middleware`: An HTTP component that validates a bearer credential before it calls the next handler.
+- `callback`: An application function supplied to a library for a specified operation.
+- `claim`: A value inside a signed token that describes its identity or authority.
+- `grant`: An authorization record that permits a client to access a resource.
+- `issuer`: The authority that creates and signs access tokens.
+- `JWKS`: A JSON Web Key Set that supplies public keys for token validation.
+- `MCP`: The Model Context Protocol that connects clients to application tools and resources.
+- `principal`: The validated application identity associated with a request.
+- `SDK`: A software development kit that implements a public protocol or API.
+- `session binding`: The identity relation that restricts an MCP session to its authorized client and grant.
+- `subject`: The account identifier that an issuer places in a token.
+- `tenant`: An application account group with its own authorization policy.
 - `billing`: Application operations for payments and subscriptions.
 - `checkout`: A provider operation through which a customer completes a purchase.
 - `consumer`: An application that imports a package from this module.
