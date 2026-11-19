@@ -5,6 +5,10 @@
 ### Improvements
 - Added strict local release, exact publication, and Go module proxy deployment targets.
 
+## [v0.20.0] - 2026-11-19
+
+- feat(billing): add per-transaction checkout URL to Paddle client
+
 ## [v0.19.1] - 2026-10-05
 
 - Merge pull request #48 from tyemirov/gix/add-shared-mcp-authorization-adapter
