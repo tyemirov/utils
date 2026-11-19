@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -148,7 +149,7 @@ func TestPaddleCommerceClientDoesNotRepeatUncertainCheckoutCreation(t *testing.T
 			if err != nil {
 				t.Fatal(err)
 			}
-			_, err = client.CreateTransaction(context.Background(), billing.PaddleTransactionInput{CustomerID: "ctm_one", PriceID: "pri_one", Metadata: map[string]string{"funding_order_id": "uncertain-order"}})
+			_, err = client.CreateTransaction(context.Background(), billing.PaddleTransactionInput{CustomerID: "ctm_one", PriceID: "pri_one", Metadata: map[string]string{"funding_order_id": "uncertain-order"}, CheckoutURL: "https://checkout.example/pay?funding_order_id=uncertain-order"})
 			if err == nil || calls.Load() != 1 {
 				t.Fatalf("uncertain creation repeated: calls=%d error=%v", calls.Load(), err)
 			}
@@ -160,5 +161,100 @@ func TestPaddleCommerceClientRejectsMissingCredentials(t *testing.T) {
 	client, err := billing.NewPaddleCommerceClient("sandbox", "", "", nil)
 	if client != nil || !errors.Is(err, billing.ErrPaddleAPIKeyEmpty) {
 		t.Fatalf("client=%v error=%v", client, err)
+	}
+}
+
+func TestPaddleCommerceClientSendsTransactionCheckoutURL(t *testing.T) {
+	const checkoutURL = "https://checkout.example/pay?funding_order_id=order%2Bone&source=pilot"
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Method != http.MethodPost || request.URL.Path != "/transactions" {
+			t.Errorf("request=%s %s", request.Method, request.URL)
+		}
+		var payload struct {
+			Checkout *struct {
+				URL string `json:"url"`
+			} `json:"checkout"`
+		}
+		if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+			t.Error(err)
+		}
+		if payload.Checkout == nil || payload.Checkout.URL != checkoutURL {
+			t.Errorf("transaction checkout=%+v; want %s", payload.Checkout, checkoutURL)
+		}
+		_, _ = io.WriteString(writer, `{"data":{"id":"txn_checkout"}}`)
+	}))
+	defer server.Close()
+	client, err := billing.NewPaddleCommerceClient("production", "fixture-key", server.URL, server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := billing.PaddleTransactionInput{CustomerID: "ctm_one", PriceID: "pri_one", CheckoutURL: checkoutURL}
+	id, err := client.CreateTransaction(t.Context(), input)
+	if err != nil || id != "txn_checkout" {
+		t.Fatalf("id=%s error=%v", id, err)
+	}
+}
+
+func TestPaddleCommerceClientOmitsAbsentCheckoutURL(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		var payload map[string]json.RawMessage
+		if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+			t.Error(err)
+		}
+		if checkout, present := payload["checkout"]; present {
+			t.Errorf("absent checkout sent: %s", checkout)
+		}
+		_, _ = io.WriteString(writer, `{"data":{"id":"txn_default"}}`)
+	}))
+	defer server.Close()
+	client, err := billing.NewPaddleCommerceClient("production", "fixture-key", server.URL, server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.CreateTransaction(t.Context(), billing.PaddleTransactionInput{CustomerID: "ctm_one", PriceID: "pri_one"}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPaddleCommerceClientRejectsInvalidCheckoutURLBeforeRequest(t *testing.T) {
+	var calls atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		writer.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+	client, err := billing.NewPaddleCommerceClient("production", "fixture-key", server.URL, server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, checkoutURL := range []string{"http://checkout.example/pay", "/pay", "https:///pay", "https://user:secret@checkout.example/pay", "https://checkout.example/pay#done", "https://checkout.example/pay#", "https://checkout.example/%zz", " "} {
+		t.Run(checkoutURL, func(t *testing.T) {
+			_, err := client.CreateTransaction(t.Context(), billing.PaddleTransactionInput{CustomerID: "ctm_one", PriceID: "pri_one", CheckoutURL: checkoutURL})
+			if !errors.Is(err, billing.ErrPaddleAPICheckoutURLInvalid) {
+				t.Fatalf("error=%v", err)
+			}
+		})
+	}
+	if calls.Load() != 0 {
+		t.Fatalf("invalid URL requests=%d", calls.Load())
+	}
+}
+
+func TestPaddleCommerceClientPreservesCancellationWithCheckoutURL(t *testing.T) {
+	var calls atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		writer.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+	client, err := billing.NewPaddleCommerceClient("production", "fixture-key", server.URL, server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	_, err = client.CreateTransaction(ctx, billing.PaddleTransactionInput{CustomerID: "ctm_one", PriceID: "pri_one", CheckoutURL: "https://checkout.example/pay?funding_order_id=order-one"})
+	if !errors.Is(err, billing.ErrPaddleAPIRequestFailed) || !strings.Contains(err.Error(), context.Canceled.Error()) || calls.Load() != 0 {
+		t.Fatalf("calls=%d error=%v", calls.Load(), err)
 	}
 }

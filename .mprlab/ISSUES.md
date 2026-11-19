@@ -171,6 +171,23 @@ Format: `- [ ] [B042] (P1) {I007} Title`
 
 ## Features
 
+- [x] [F105] Add a transaction checkout URL to the Paddle client.
+  Goal:
+  Let each application select its checkout URL without a change to the account default.
+  Requirements:
+  - Add optional `PaddleTransactionInput.CheckoutURL` as native `checkout.url`.
+  - Require HTTPS for each supplied URL. Reject credentials and fragments.
+  - Preserve the URL query, order metadata, cancellation, and single-attempt transaction creation.
+  - If the URL is absent, omit `checkout` and use the Paddle account default.
+  Validation:
+  - Observe the transaction request through a real local HTTP server before implementation.
+  - Run focused billing checks. Keep final CI and independent review under primary agent ownership.
+  Validation evidence:
+  The initial HTTP test failed because the request had no `checkout` object.
+  The billing package passed with the race detector and 100 percent statement coverage.
+  `make lint`, the format check, and the changed document checks passed.
+  Independent architecture review found no actionable findings. Final `make ci` passed: formatting, lint, build, integration tests, and all 18 package coverage gates at 100 percent.
+
 - [x] [F104] (P1) {P001} Add shared MCP authorization with full test coverage.
   Goal:
   Connect application token validation to the official MCP SDK through `utils/mcpauth`.

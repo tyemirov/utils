@@ -57,6 +57,13 @@ A nil HTTP client selects the shared direct transport.
 
 Call `CreateTransaction` with the selected customer, price, and application order metadata.
 The shared client sends that metadata as `custom_data` and creates one automatic-collection transaction.
+
+Set optional `PaddleTransactionInput.CheckoutURL` to select a checkout page for one transaction.
+The client sends this value as native `checkout.url` and preserves its query text.
+Use an HTTPS URL without credentials or a fragment. Paddle must approve the checkout domain for live use.
+If the value is empty, the client omits `checkout` and Paddle uses the account default.
+This option does not change the shared account default.
+
 Transaction creation does not automatically repeat after a failed HTTP response or connection loss.
 The application must retain uncertain outcomes and reconcile them before another creation attempt.
 

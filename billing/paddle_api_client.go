@@ -52,6 +52,7 @@ var (
 	ErrPaddleAPISubscriptionNotFound = errors.New("billing.paddle.api.subscription.not_found")
 	ErrPaddleAPIPortalURLNotFound    = errors.New("billing.paddle.api.portal_url.not_found")
 	ErrPaddleAPIDefaultCheckoutURL   = errors.New("billing.paddle.api.default_checkout_url.not_set")
+	ErrPaddleAPICheckoutURLInvalid   = errors.New("billing.paddle.api.checkout_url.invalid")
 	ErrPaddleAPIPriceNotFound        = errors.New("billing.paddle.api.price.not_found")
 )
 
@@ -114,6 +115,7 @@ type paddleCreateTransactionRequest struct {
 	CollectionMode string                        `json:"collection_mode"`
 	CustomerID     string                        `json:"customer_id"`
 	CustomData     map[string]string             `json:"custom_data,omitempty"`
+	Checkout       *PaddleTransactionCheckout    `json:"checkout,omitempty"`
 }
 
 type paddleCreateTransactionItem struct {
@@ -255,6 +257,13 @@ func (client *paddleAPIClient) CreateTransaction(ctx context.Context, input padd
 		CollectionMode: "automatic",
 		CustomerID:     strings.TrimSpace(input.CustomerID),
 		CustomData:     input.Metadata,
+	}
+	if input.CheckoutURL != "" {
+		checkoutURL, err := url.Parse(input.CheckoutURL)
+		if err != nil || checkoutURL.Scheme != "https" || checkoutURL.Hostname() == "" || checkoutURL.User != nil || strings.Contains(input.CheckoutURL, "#") {
+			return "", fmt.Errorf("create Paddle transaction: %w", ErrPaddleAPICheckoutURLInvalid)
+		}
+		requestPayload.Checkout = &PaddleTransactionCheckout{URL: input.CheckoutURL}
 	}
 	responsePayload := paddleCreateTransactionResponse{}
 	if err := client.doJSONRequest(ctx, http.MethodPost, "/transactions", requestPayload, &responsePayload); err != nil {

@@ -65,6 +65,9 @@ type paddleTransactionInput struct {
 	CustomerID string
 	PriceID    string
 	Metadata   map[string]string
+	// CheckoutURL selects an approved HTTPS checkout page for this transaction.
+	// Empty uses the Paddle account default. Query text is preserved.
+	CheckoutURL string
 }
 
 type paddlePriceDetails struct {
